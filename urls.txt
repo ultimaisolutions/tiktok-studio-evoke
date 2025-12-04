@@ -1,0 +1,11 @@
+# TikTok Video URLs
+# Add one URL per line
+# Lines starting with # are ignored
+
+# Example:
+# https://www.tiktok.com/@username/video/1234567890123456789
+
+#https://www.tiktok.com/@ajilllaa/video/7553904657001762062
+#https://www.tiktok.com/@ajilllaa/video/7550157239709879566
+#https://www.tiktok.com/@hadas.masuri/video/7285726283529587976
+#https://www.tiktok.com/@hadas.masuri/video/7244599831577120018

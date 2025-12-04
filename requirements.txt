@@ -1,0 +1,19 @@
+# Core scraper dependencies
+pyktok
+playwright
+browser-cookie3
+beautifulsoup4
+numpy
+pandas
+requests
+
+# Video analysis dependencies (required)
+opencv-python-headless>=4.8.0
+moviepy>=1.0.3
+scikit-image>=0.21.0
+
+# Optional: For better face/person detection (requires Python <3.13)
+# mediapipe>=0.10.0
+
+# For GPU-accelerated person detection (extreme/maximum presets)
+ultralytics>=8.0.0
