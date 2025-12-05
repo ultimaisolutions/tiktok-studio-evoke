@@ -760,19 +760,12 @@ class TikTokStudioScraper:
 
             self.logger.info(f"Found {len(video_images)} total video images after scrolling")
 
-            # Get parent button for each image
-            video_buttons = []
-            for img in video_images:
-                try:
-                    # Get parent button element
-                    button = await img.evaluate_handle('(img) => img.closest("button")')
-                    if button:
-                        video_buttons.append(button)
-                except Exception as e:
-                    self.logger.debug(f"Error finding parent button: {e}")
-                    continue
+            # Get button elements directly (not via evaluate_handle)
+            # Use :has() CSS pseudo-class to find buttons that contain our images
+            self.logger.info("Getting clickable button elements...")
+            video_buttons = await self.page.query_selector_all('button:has(img[data-tt="components_AnalyticsVideoSelector_Image"])')
 
-            self.logger.info(f"Found {len(video_buttons)} video buttons")
+            self.logger.info(f"Found {len(video_buttons)} clickable video buttons")
 
             # Store current URL to detect changes
             initial_url = self.page.url
