@@ -673,14 +673,19 @@ class TikTokStudioScraper:
         """
         Get list of all videos from TikTok Studio sidebar.
 
-        The sidebar is visible on analytics pages and contains links to all videos.
+        The sidebar contains video buttons with infinite scroll/lazy loading.
+        Videos are buttons (not links) that use JavaScript navigation.
+        Video IDs are extracted by clicking each button and capturing the URL change.
 
         Returns:
             List of video info dictionaries
         """
         videos = []
+        seen_video_ids = set()
 
         try:
+            self.logger.info("Loading video list from sidebar...")
+
             # Wait for sidebar to load
             try:
                 await self.page.wait_for_selector('[class*="sidebar"]', timeout=5000)
@@ -690,57 +695,139 @@ class TikTokStudioScraper:
 
             await self.page.wait_for_timeout(1000)
 
-            # Look for analytics links in the sidebar
-            # Based on user screenshots, videos appear in sidebar with links like /analytics/{video_id}
-            self.logger.info("Searching for video analytics links...")
+            # Find the scrollable container (sidebar video list)
+            # Common selector patterns for scrollable containers
+            sidebar_selectors = [
+                '[data-e2e="components_analytics_VideoSelector_VideoSelectContainer"]',
+                '[class*="VideoSelector"]',
+                '[class*="sidebar"] [class*="scroll"]',
+                '[class*="sidebar"]'
+            ]
 
-            # Find all links to analytics pages
-            all_analytics_links = await self.page.query_selector_all('a[href*="/analytics/"]')
-
-            self.logger.info(f"Found {len(all_analytics_links)} analytics links")
-
-            # Extract video IDs from links
-            for element in all_analytics_links:
+            sidebar_container = None
+            for selector in sidebar_selectors:
                 try:
-                    href = await element.get_attribute("href")
-                    if href:
-                        # Extract video ID from URL pattern: /analytics/{video_id}
-                        match = re.search(r'/analytics/(\d+)', href)
-                        if match:
-                            video_id = match.group(1)
-
-                            # Build full URL
-                            if href.startswith("http"):
-                                full_url = href
-                            elif href.startswith("/"):
-                                full_url = f"https://www.tiktok.com{href}"
-                            else:
-                                full_url = f"https://www.tiktok.com/{href}"
-
-                            videos.append({
-                                "video_id": video_id,
-                                "analytics_url": full_url,
-                                "element": element
-                            })
-                            self.logger.debug(f"  Found video: {video_id}")
-                except Exception as e:
-                    self.logger.debug(f"Error extracting video info from link: {e}")
+                    sidebar_container = await self.page.query_selector(selector)
+                    if sidebar_container:
+                        self.logger.info(f"Found sidebar container: {selector}")
+                        break
+                except:
                     continue
 
-            # Deduplicate by video_id (same video might have multiple analytics links)
-            seen_ids = set()
-            unique_videos = []
-            for v in videos:
-                if v["video_id"] not in seen_ids:
-                    seen_ids.add(v["video_id"])
-                    unique_videos.append(v)
+            if not sidebar_container:
+                self.logger.warning("Could not find scrollable sidebar container, using page scroll")
 
-            self.logger.info(f"Found {len(unique_videos)} unique videos")
+            # Handle infinite scroll - scroll until all videos are loaded
+            self.logger.info("Loading all videos via infinite scroll...")
+            previous_count = 0
+            scroll_attempts = 0
+            max_scroll_attempts = 50  # Prevent infinite loops
 
-            return unique_videos
+            while scroll_attempts < max_scroll_attempts:
+                # Count current video buttons
+                video_buttons = await self.page.query_selector_all(
+                    'button img[data-tt="components_AnalyticsVideoSelector_Image"]'
+                )
+                current_count = len(video_buttons)
+
+                self.logger.info(f"Scroll attempt {scroll_attempts + 1}: Found {current_count} videos")
+
+                # If count hasn't changed, we've reached the end
+                if current_count == previous_count and scroll_attempts > 0:
+                    self.logger.info("No new videos loaded, finished scrolling")
+                    break
+
+                previous_count = current_count
+
+                # Scroll to bottom of sidebar
+                if sidebar_container:
+                    # Scroll the sidebar container
+                    await self.page.evaluate('''(element) => {
+                        element.scrollTop = element.scrollHeight;
+                    }''', sidebar_container)
+                else:
+                    # Fallback: scroll the page
+                    await self.page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+
+                # Wait for new videos to load
+                await self.page.wait_for_timeout(1500)
+                scroll_attempts += 1
+
+            # Get all video button elements after scrolling
+            video_images = await self.page.query_selector_all(
+                'button img[data-tt="components_AnalyticsVideoSelector_Image"]'
+            )
+
+            self.logger.info(f"Found {len(video_images)} total video images after scrolling")
+
+            # Get parent button for each image
+            video_buttons = []
+            for img in video_images:
+                try:
+                    # Get parent button element
+                    button = await img.evaluate_handle('(img) => img.closest("button")')
+                    if button:
+                        video_buttons.append(button)
+                except Exception as e:
+                    self.logger.debug(f"Error finding parent button: {e}")
+                    continue
+
+            self.logger.info(f"Found {len(video_buttons)} video buttons")
+
+            # Store current URL to detect changes
+            initial_url = self.page.url
+
+            # Click each button to extract video ID from URL change
+            for idx, button in enumerate(video_buttons, 1):
+                try:
+                    # Log progress every 50 videos
+                    if idx % 50 == 0:
+                        self.logger.info(f"Processing video button {idx}/{len(video_buttons)}...")
+
+                    # Click the button to navigate to its analytics page
+                    await button.click()
+
+                    # Wait for URL to change
+                    await self.page.wait_for_timeout(300)
+
+                    # Get new URL
+                    new_url = self.page.url
+
+                    # Extract video ID from URL
+                    # URL pattern: https://www.tiktok.com/tiktokstudio/analytics/{video_id}/overview
+                    match = re.search(r'/analytics/(\d+)', new_url)
+
+                    if match:
+                        video_id = match.group(1)
+
+                        # Skip duplicates
+                        if video_id in seen_video_ids:
+                            continue
+
+                        seen_video_ids.add(video_id)
+
+                        # Build analytics URL
+                        analytics_url = f"https://www.tiktok.com/tiktokstudio/analytics/{video_id}/overview"
+
+                        videos.append({
+                            "video_id": video_id,
+                            "analytics_url": analytics_url,
+                        })
+
+                        self.logger.debug(f"  [{idx}] Found video: {video_id}")
+
+                except Exception as e:
+                    self.logger.debug(f"Error processing button {idx}: {e}")
+                    continue
+
+            self.logger.info(f"Successfully extracted {len(videos)} unique video IDs")
+
+            return videos
 
         except Exception as e:
             self.logger.error(f"Error getting video list: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return []
 
     def _is_video_processed(self, video_id: str) -> bool:
