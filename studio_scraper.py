@@ -591,18 +591,16 @@ class TikTokStudioScraper:
         self.logger.info("Starting to scrape all videos from TikTok Studio...")
 
         try:
-            current_url = self.page.url
-
-            # Only navigate if not already on Studio
-            if 'tiktokstudio' not in current_url.lower():
-                # If not on Studio, navigate to content page
-                await self.page.goto(STUDIO_CONTENT_URL, wait_until="networkidle", timeout=60000)
-                await self.page.wait_for_timeout(3000)
-            else:
-                # Already on Studio page (likely analytics page from CDP connection)
-                # Video list is in sidebar - just wait for it to be ready
-                self.logger.info("Already on TikTok Studio page, skipping navigation")
+            # If connected to existing browser via CDP, don't navigate
+            # User already has the correct analytics page open with sidebar
+            if self._connected_to_existing:
+                self.logger.info("Using current page from CDP connection (already on analytics page)")
                 await self.page.wait_for_timeout(1000)
+            else:
+                # Launched new browser - navigate to Studio home (NOT /content)
+                # Studio home will show analytics page with sidebar
+                await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=60000)
+                await self.page.wait_for_timeout(3000)
 
             # Get list of videos from the sidebar
             video_elements = await self._get_video_list()
