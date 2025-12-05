@@ -591,11 +591,20 @@ class TikTokStudioScraper:
         self.logger.info("Starting to scrape all videos from TikTok Studio...")
 
         try:
-            # Navigate to content page to see video list
-            await self.page.goto(STUDIO_CONTENT_URL, wait_until="networkidle", timeout=60000)
-            await self.page.wait_for_timeout(3000)
+            current_url = self.page.url
 
-            # Get list of videos from the sidebar/content list
+            # Only navigate if not already on Studio
+            if 'tiktokstudio' not in current_url.lower():
+                # If not on Studio, navigate to content page
+                await self.page.goto(STUDIO_CONTENT_URL, wait_until="networkidle", timeout=60000)
+                await self.page.wait_for_timeout(3000)
+            else:
+                # Already on Studio page (likely analytics page from CDP connection)
+                # Video list is in sidebar - just wait for it to be ready
+                self.logger.info("Already on TikTok Studio page, skipping navigation")
+                await self.page.wait_for_timeout(1000)
+
+            # Get list of videos from the sidebar
             video_elements = await self._get_video_list()
 
             if not video_elements:
@@ -664,7 +673,9 @@ class TikTokStudioScraper:
 
     async def _get_video_list(self) -> list:
         """
-        Get list of all videos from TikTok Studio content page.
+        Get list of all videos from TikTok Studio sidebar.
+
+        The sidebar is visible on analytics pages and contains links to all videos.
 
         Returns:
             List of video info dictionaries
@@ -672,35 +683,26 @@ class TikTokStudioScraper:
         videos = []
 
         try:
-            # Wait for video list to load
-            await self.page.wait_for_timeout(2000)
+            # Wait for sidebar to load
+            try:
+                await self.page.wait_for_selector('[class*="sidebar"]', timeout=5000)
+                self.logger.info("Sidebar detected")
+            except:
+                self.logger.warning("Sidebar selector not found, continuing anyway")
 
-            # Look for video items in the content list
-            # Based on screenshots, videos appear in a sidebar/list with thumbnails
-            video_selectors = [
-                '[class*="video-item"]',
-                '[class*="content-item"]',
-                '[class*="post-item"]',
-                'a[href*="/analytics/"]',
-                '[data-e2e*="video"]',
-            ]
+            await self.page.wait_for_timeout(1000)
 
-            video_elements = []
-            for selector in video_selectors:
-                elements = await self.page.query_selector_all(selector)
-                if elements:
-                    video_elements = elements
-                    self.logger.info(f"Found videos using selector: {selector}")
-                    break
+            # Look for analytics links in the sidebar
+            # Based on user screenshots, videos appear in sidebar with links like /analytics/{video_id}
+            self.logger.info("Searching for video analytics links...")
 
-            # If no specific selectors work, try to find links to analytics pages
-            if not video_elements:
-                # Get all links and filter for analytics URLs
-                all_links = await self.page.query_selector_all('a[href*="tiktokstudio/analytics"]')
-                video_elements = all_links
+            # Find all links to analytics pages
+            all_analytics_links = await self.page.query_selector_all('a[href*="/analytics/"]')
 
-            # Extract video IDs from elements
-            for element in video_elements:
+            self.logger.info(f"Found {len(all_analytics_links)} analytics links")
+
+            # Extract video IDs from links
+            for element in all_analytics_links:
                 try:
                     href = await element.get_attribute("href")
                     if href:
@@ -708,22 +710,34 @@ class TikTokStudioScraper:
                         match = re.search(r'/analytics/(\d+)', href)
                         if match:
                             video_id = match.group(1)
+
+                            # Build full URL
+                            if href.startswith("http"):
+                                full_url = href
+                            elif href.startswith("/"):
+                                full_url = f"https://www.tiktok.com{href}"
+                            else:
+                                full_url = f"https://www.tiktok.com/{href}"
+
                             videos.append({
                                 "video_id": video_id,
-                                "analytics_url": href if href.startswith("http") else f"https://www.tiktok.com{href}",
+                                "analytics_url": full_url,
                                 "element": element
                             })
+                            self.logger.debug(f"  Found video: {video_id}")
                 except Exception as e:
-                    self.logger.debug(f"Error extracting video info: {e}")
+                    self.logger.debug(f"Error extracting video info from link: {e}")
                     continue
 
-            # Deduplicate by video_id
+            # Deduplicate by video_id (same video might have multiple analytics links)
             seen_ids = set()
             unique_videos = []
             for v in videos:
                 if v["video_id"] not in seen_ids:
                     seen_ids.add(v["video_id"])
                     unique_videos.append(v)
+
+            self.logger.info(f"Found {len(unique_videos)} unique videos")
 
             return unique_videos
 
