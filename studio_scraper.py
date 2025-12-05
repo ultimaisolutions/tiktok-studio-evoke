@@ -42,7 +42,7 @@ class TikTokStudioScraper:
     - Incremental processing (skips already processed videos)
     """
 
-    def __init__(self, output_dir: str, logger, browser_type: str = "chromium"):
+    def __init__(self, output_dir: str, logger, browser_type: str = "chromium", cdp_port: int = None):
         """
         Initialize the Studio scraper.
 
@@ -50,10 +50,12 @@ class TikTokStudioScraper:
             output_dir: Base directory for saving screenshots and videos
             logger: Logger instance for status messages
             browser_type: Playwright browser type (chromium, firefox, webkit)
+            cdp_port: Custom CDP port for connecting to existing browser
         """
         self.output_dir = Path(output_dir)
         self.logger = logger
         self.browser_type = browser_type
+        self.cdp_port = cdp_port
 
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
@@ -62,10 +64,13 @@ class TikTokStudioScraper:
 
         self._is_logged_in = False
         self._processed_videos = set()
+        self._connected_to_existing = False
 
     async def initialize(self) -> bool:
         """
         Initialize browser and attempt authentication.
+
+        Flow: Try cookies → Connect to existing browser → Manual login in new browser
 
         Returns:
             True if successfully logged in, False otherwise
@@ -74,6 +79,14 @@ class TikTokStudioScraper:
 
         # Launch Playwright
         self.playwright = await async_playwright().start()
+
+        # Step 1: Try to connect to existing browser with Studio already open
+        if await self._try_connect_to_existing_browser():
+            self.logger.info("Using existing browser with TikTok Studio")
+            return True
+
+        # Step 2: Fallback to launching new browser
+        self.logger.info("Launching new browser...")
 
         # Select browser type
         if self.browser_type == "firefox":
@@ -84,10 +97,7 @@ class TikTokStudioScraper:
             browser_launcher = self.playwright.chromium
 
         # Launch browser in headful mode so user can see/interact
-        # Note: --start-maximized doesn't work on macOS/Linux, so we rely on viewport instead
-        self.browser = await browser_launcher.launch(
-            headless=False,
-        )
+        self.browser = await browser_launcher.launch(headless=False)
 
         # Create context with viewport
         self.context = await self.browser.new_context(
@@ -108,6 +118,7 @@ class TikTokStudioScraper:
         self._is_logged_in = await self._check_logged_in()
 
         if not self._is_logged_in:
+            # Step 3: Manual login
             self.logger.info("Not logged in. Please log in manually in the browser window.")
             print("\n" + "=" * 50)
             print("  MANUAL LOGIN REQUIRED")
@@ -196,6 +207,333 @@ class TikTokStudioScraper:
             self.logger.warning(f"Error loading cookies: {e}")
             return False
 
+    async def _find_chrome_debugging_port(self) -> Optional[int]:
+        """
+        Scan Chrome/Edge/Brave processes to find one with remote-debugging-port flag.
+
+        Returns:
+            Port number if found, None otherwise
+        """
+        try:
+            import psutil
+
+            for proc in psutil.process_iter(['name', 'cmdline']):
+                try:
+                    name = proc.info['name'].lower()
+                    cmdline = proc.info['cmdline'] or []
+
+                    # Check if it's a Chromium-based browser
+                    if not any(x in name for x in ['chrome', 'chromium', 'msedge', 'edge', 'brave']):
+                        continue
+
+                    # Look for remote-debugging-port argument
+                    for i, arg in enumerate(cmdline):
+                        if '--remote-debugging-port=' in arg:
+                            port = int(arg.split('=')[1])
+                            return port
+                        elif arg == '--remote-debugging-port' and i + 1 < len(cmdline):
+                            try:
+                                port = int(cmdline[i + 1])
+                                return port
+                            except ValueError:
+                                continue
+                except (psutil.NoSuchProcess, psutil.AccessDenied, IndexError):
+                    continue
+
+            return None
+
+        except ImportError:
+            self.logger.warning("psutil not installed, skipping process detection")
+            return None
+        except Exception as e:
+            self.logger.debug(f"Error detecting Chrome process: {e}")
+            return None
+
+    async def _verify_cdp_endpoint(self, port: int) -> bool:
+        """
+        Verify that a CDP endpoint is responding.
+
+        Args:
+            port: Port number to check
+
+        Returns:
+            True if endpoint is responding
+        """
+        try:
+            import requests
+
+            endpoint = f"http://localhost:{port}/json/version"
+            response = requests.get(endpoint, timeout=2)
+            return response.status_code == 200
+
+        except Exception:
+            return False
+
+    async def _find_cdp_endpoint(self) -> Optional[str]:
+        """
+        Find an active CDP endpoint for connecting to existing browser.
+
+        Returns:
+            Endpoint URL (http://localhost:PORT) or None
+        """
+        ports_to_check = []
+
+        # If user specified a custom port, only check that
+        if self.cdp_port:
+            ports_to_check = [self.cdp_port]
+        else:
+            # First try to detect from running processes
+            detected_port = await self._find_chrome_debugging_port()
+            if detected_port:
+                ports_to_check.append(detected_port)
+
+            # Then scan common ports
+            ports_to_check.extend(range(9222, 9230))
+
+        # Try each port
+        for port in ports_to_check:
+            if await self._verify_cdp_endpoint(port):
+                endpoint = f"http://localhost:{port}"
+                self.logger.info(f"Found CDP endpoint at {endpoint}")
+                return endpoint
+
+        return None
+
+    async def _find_tiktok_studio_pages(self, browser: Browser) -> list:
+        """
+        Find all pages with TikTok Studio URLs in the connected browser.
+
+        Args:
+            browser: Connected browser instance
+
+        Returns:
+            List of tuples: (page, url, is_studio)
+            is_studio=True means it's on tiktokstudio domain, False means just tiktok.com
+        """
+        studio_pages = []
+
+        try:
+            # Get all contexts (usually just one for CDP connections)
+            for context in browser.contexts:
+                for page in context.pages:
+                    url = page.url
+
+                    # Check if it's a TikTok Studio URL
+                    # Example: https://www.tiktok.com/tiktokstudio/analytics/7513280379839712530
+                    if 'tiktokstudio' in url.lower():
+                        studio_pages.append((page, url, True))
+                    elif 'tiktok.com' in url.lower():
+                        studio_pages.append((page, url, False))
+
+            # Sort: Studio pages first, then others
+            studio_pages.sort(key=lambda x: (not x[2], x[1]))
+
+            return studio_pages
+
+        except Exception as e:
+            self.logger.error(f"Error finding TikTok pages: {e}")
+            return []
+
+    async def _verify_page_logged_in(self, page: Page) -> bool:
+        """
+        Verify that a page is logged in to TikTok Studio.
+
+        Args:
+            page: Page to check
+
+        Returns:
+            True if logged in
+        """
+        try:
+            # Navigate to Studio if not already there
+            current_url = page.url
+            if 'tiktokstudio' not in current_url.lower():
+                await page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
+
+            # Use existing login check logic
+            # Wait a moment for page to settle
+            await page.wait_for_timeout(2000)
+
+            current_url = page.url
+
+            # If on login page, not logged in
+            if "login" in current_url.lower():
+                return False
+
+            # If on Studio page, check for logged-in indicators
+            if "tiktokstudio" in current_url:
+                try:
+                    await page.wait_for_selector('[class*="sidebar"]', timeout=5000)
+                    return True
+                except:
+                    pass
+
+                # Alternative: check if there's no login button
+                login_button = await page.query_selector('button:has-text("Log in")')
+                if not login_button:
+                    return True
+
+            return False
+
+        except Exception as e:
+            self.logger.debug(f"Error verifying login status: {e}")
+            return False
+
+    async def _select_page_from_list(self, pages: list) -> Optional[Page]:
+        """
+        Let user select a TikTok Studio page from multiple options.
+
+        Args:
+            pages: List of tuples (page, url, is_studio)
+
+        Returns:
+            Selected page or None
+        """
+        print("\n" + "=" * 70)
+        print("  MULTIPLE TIKTOK STUDIO TABS FOUND")
+        print("=" * 70)
+        print("  Please select which tab to use:\n")
+
+        for i, (page, url, is_studio) in enumerate(pages, 1):
+            marker = "[STUDIO]" if is_studio else "[TIKTOK]"
+            # Truncate URL if too long
+            display_url = url if len(url) < 60 else url[:57] + "..."
+            print(f"  {i}. {marker} {display_url}")
+
+        print("\n" + "=" * 70)
+
+        # Get user input
+        while True:
+            try:
+                choice = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: input(f"  Enter number (1-{len(pages)}): ")
+                )
+                choice_num = int(choice)
+                if 1 <= choice_num <= len(pages):
+                    selected_page = pages[choice_num - 1][0]
+                    self.logger.info(f"User selected page {choice_num}")
+                    return selected_page
+                else:
+                    print(f"  Please enter a number between 1 and {len(pages)}")
+            except ValueError:
+                print("  Please enter a valid number")
+            except KeyboardInterrupt:
+                return None
+
+    async def _try_connect_to_existing_browser(self) -> bool:
+        """
+        Try to connect to an existing Chromium browser with TikTok Studio open.
+
+        Returns:
+            True if successfully connected and found a logged-in Studio page
+        """
+        try:
+            self.logger.info("Attempting to connect to existing browser...")
+
+            # Find CDP endpoint
+            endpoint = await self._find_cdp_endpoint()
+
+            if not endpoint:
+                self.logger.info("No browser with remote debugging found")
+                self._show_cdp_instructions()
+                return False
+
+            # Connect to browser
+            self.logger.info(f"Connecting to browser at {endpoint}...")
+
+            try:
+                self.browser = await self.playwright.chromium.connect_over_cdp(
+                    endpoint,
+                    timeout=10000  # 10 second timeout
+                )
+                self._connected_to_existing = True
+
+            except Exception as e:
+                self.logger.warning(f"Failed to connect to CDP endpoint: {e}")
+                self._show_cdp_instructions()
+                return False
+
+            # Find TikTok Studio pages
+            self.logger.info("Searching for TikTok Studio tabs...")
+            studio_pages = await self._find_tiktok_studio_pages(self.browser)
+
+            if not studio_pages:
+                self.logger.info("No TikTok Studio tabs found in browser")
+                # Disconnect and return False to try next fallback
+                await self.browser.close()
+                self.browser = None
+                self._connected_to_existing = False
+                return False
+
+            # Filter for logged-in pages
+            self.logger.info("Verifying login status...")
+            logged_in_pages = []
+
+            for page, url, is_studio in studio_pages:
+                self.logger.debug(f"Checking page: {url}")
+                if await self._verify_page_logged_in(page):
+                    logged_in_pages.append((page, url, is_studio))
+                    self.logger.debug(f"  ✓ Logged in")
+                else:
+                    self.logger.debug(f"  ✗ Not logged in")
+
+            if not logged_in_pages:
+                self.logger.info("No logged-in TikTok Studio tabs found")
+                await self.browser.close()
+                self.browser = None
+                self._connected_to_existing = False
+                return False
+
+            # Select page (single or user choice)
+            if len(logged_in_pages) == 1:
+                selected_page = logged_in_pages[0][0]
+                self.logger.info(f"Using Studio tab: {logged_in_pages[0][1]}")
+            else:
+                selected_page = await self._select_page_from_list(logged_in_pages)
+                if not selected_page:
+                    self.logger.info("No page selected by user")
+                    await self.browser.close()
+                    self.browser = None
+                    self._connected_to_existing = False
+                    return False
+
+            # Set up the page and context
+            self.page = selected_page
+            self.context = self.page.context
+            self._is_logged_in = True
+
+            self.logger.info("Successfully connected to existing browser!")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error connecting to existing browser: {e}")
+            # Clean up on error
+            if self.browser:
+                try:
+                    await self.browser.close()
+                except:
+                    pass
+                self.browser = None
+            self._connected_to_existing = False
+            return False
+
+    def _show_cdp_instructions(self):
+        """Show instructions for launching Chrome with remote debugging."""
+        print("\n" + "=" * 70)
+        print("  TIP: Connect to Existing Browser")
+        print("=" * 70)
+        print("  To use an existing browser, launch Chrome with remote debugging:")
+        print()
+        print("  Windows:")
+        print('    chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\\temp\\chrome_profile"')
+        print()
+        print("  macOS/Linux:")
+        print('    google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome_profile')
+        print()
+        print("  Then navigate to TikTok Studio and log in before running this script.")
+        print("=" * 70 + "\n")
+
     async def _check_logged_in(self) -> bool:
         """
         Check if we're currently logged in to TikTok Studio.
@@ -252,57 +590,77 @@ class TikTokStudioScraper:
 
         self.logger.info("Starting to scrape all videos from TikTok Studio...")
 
-        # Navigate to content page to see video list
-        await self.page.goto(STUDIO_CONTENT_URL, wait_until="networkidle", timeout=60000)
-        await self.page.wait_for_timeout(3000)
+        try:
+            # Navigate to content page to see video list
+            await self.page.goto(STUDIO_CONTENT_URL, wait_until="networkidle", timeout=60000)
+            await self.page.wait_for_timeout(3000)
 
-        # Get list of videos from the sidebar/content list
-        video_elements = await self._get_video_list()
+            # Get list of videos from the sidebar/content list
+            video_elements = await self._get_video_list()
 
-        if not video_elements:
-            self.logger.warning("No videos found in TikTok Studio")
-            return results
+            if not video_elements:
+                self.logger.warning("No videos found in TikTok Studio")
+                return results
 
-        results["total"] = len(video_elements)
-        self.logger.info(f"Found {len(video_elements)} videos to process")
+            results["total"] = len(video_elements)
+            self.logger.info(f"Found {len(video_elements)} videos to process")
 
-        # Process each video
-        for idx, video_info in enumerate(video_elements, 1):
-            video_id = video_info.get("video_id", f"unknown_{idx}")
+            # Process each video
+            for idx, video_info in enumerate(video_elements, 1):
+                video_id = video_info.get("video_id", f"unknown_{idx}")
 
-            self.logger.info(f"\n[{idx}/{len(video_elements)}] Processing video: {video_id}")
+                self.logger.info(f"\n[{idx}/{len(video_elements)}] Processing video: {video_id}")
 
-            try:
-                # Check if already processed
-                if self._is_video_processed(video_id):
-                    self.logger.info(f"  Skipping (already processed): {video_id}")
-                    results["skipped"] += 1
-                    continue
+                try:
+                    # Check if already processed
+                    if self._is_video_processed(video_id):
+                        self.logger.info(f"  Skipping (already processed): {video_id}")
+                        results["skipped"] += 1
+                        continue
 
-                # Process the video
-                video_result = await self._process_single_video(video_info)
+                    # Process the video
+                    video_result = await self._process_single_video(video_info)
 
-                if video_result.get("success"):
-                    results["processed"] += 1
-                    results["videos"].append(video_result)
-                    self.logger.info(f"  Successfully processed: {video_id}")
-                else:
+                    if video_result.get("success"):
+                        results["processed"] += 1
+                        results["videos"].append(video_result)
+                        self.logger.info(f"  Successfully processed: {video_id}")
+                    else:
+                        results["failed"] += 1
+                        results["errors"].append({
+                            "video_id": video_id,
+                            "error": video_result.get("error", "Unknown error")
+                        })
+                        self.logger.warning(f"  Failed to process: {video_id}")
+
+                except Exception as e:
                     results["failed"] += 1
                     results["errors"].append({
                         "video_id": video_id,
-                        "error": video_result.get("error", "Unknown error")
+                        "error": str(e)
                     })
-                    self.logger.warning(f"  Failed to process: {video_id}")
+                    self.logger.error(f"  Error processing {video_id}: {e}")
 
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({
-                    "video_id": video_id,
-                    "error": str(e)
-                })
-                self.logger.error(f"  Error processing {video_id}: {e}")
+            return results
 
-        return results
+        except Exception as e:
+            # Check if it's a browser disconnection error
+            error_msg = str(e).lower()
+            if any(x in error_msg for x in ['target closed', 'disconnected', 'connection closed', 'browser closed']):
+                self.logger.error("Browser was closed by user")
+                print("\n" + "=" * 70)
+                print("  BROWSER CLOSED")
+                print("=" * 70)
+                print(f"  Progress saved: {results['processed']} videos processed")
+                print(f"  Remaining: {results['total'] - results['processed'] - results['skipped']} videos")
+                print("  Exiting gracefully...")
+                print("=" * 70 + "\n")
+                results["error"] = "Browser closed by user"
+                results["interrupted"] = True
+                return results
+            else:
+                # Re-raise other exceptions
+                raise
 
     async def _get_video_list(self) -> list:
         """
@@ -672,15 +1030,21 @@ class TikTokStudioScraper:
     async def close(self):
         """Clean up browser resources."""
         try:
-            if self.page:
+            if self.page and not self._connected_to_existing:
                 await self.page.close()
-            if self.context:
+            if self.context and not self._connected_to_existing:
                 await self.context.close()
             if self.browser:
-                await self.browser.close()
+                if self._connected_to_existing:
+                    # For connected browsers, just disconnect (don't close the browser)
+                    await self.browser.close()
+                    self.logger.info("Disconnected from browser")
+                else:
+                    # For launched browsers, close completely
+                    await self.browser.close()
+                    self.logger.info("Browser closed")
             if self.playwright:
                 await self.playwright.stop()
-            self.logger.info("Browser closed")
         except Exception as e:
             self.logger.debug(f"Error closing browser: {e}")
 
@@ -691,6 +1055,7 @@ async def run_studio_scraper(
     browser_type: str = "chromium",
     skip_download: bool = False,
     skip_analysis: bool = False,
+    cdp_port: int = None,
 ) -> dict:
     """
     Main entry point for running the TikTok Studio scraper.
@@ -701,11 +1066,12 @@ async def run_studio_scraper(
         browser_type: Browser to use (chromium, firefox, webkit)
         skip_download: If True, only capture screenshots
         skip_analysis: If True, skip video analysis
+        cdp_port: Custom CDP port for connecting to existing browser
 
     Returns:
         Results summary dictionary
     """
-    scraper = TikTokStudioScraper(output_dir, logger, browser_type)
+    scraper = TikTokStudioScraper(output_dir, logger, browser_type, cdp_port=cdp_port)
 
     try:
         # Initialize and login

@@ -6,6 +6,7 @@ beautifulsoup4
 numpy
 pandas
 requests
+psutil>=5.9.0
 
 # Video analysis dependencies (required)
 opencv-python-headless>=4.8.0

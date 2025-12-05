@@ -201,6 +201,13 @@ TikTok Studio Mode:
         help="Download but don't analyze videos (Studio mode)"
     )
 
+    studio_group.add_argument(
+        "--cdp-port",
+        type=int,
+        default=None,
+        help="Custom CDP port for connecting to existing browser (default: auto-scan 9222-9229)"
+    )
+
     return parser.parse_args()
 
 
@@ -326,6 +333,7 @@ def run_studio_mode(args, logger) -> dict:
             browser_type=args.studio_browser,
             skip_download=args.skip_download,
             skip_analysis=args.skip_analysis,
+            cdp_port=args.cdp_port,
         )
     )
 
