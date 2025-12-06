@@ -42,7 +42,7 @@ class TikTokStudioScraper:
     - Incremental processing (skips already processed videos)
     """
 
-    def __init__(self, output_dir: str, logger, browser_type: str = "chromium", cdp_port: int = None):
+    def __init__(self, output_dir: str, logger, browser_type: str = "chromium", cdp_port: int = None, username: str = None):
         """
         Initialize the Studio scraper.
 
@@ -51,6 +51,7 @@ class TikTokStudioScraper:
             logger: Logger instance for status messages
             browser_type: Playwright browser type (chromium, firefox, webkit)
             cdp_port: Custom CDP port for connecting to existing browser
+            username: TikTok username for constructing video URLs
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -58,6 +59,7 @@ class TikTokStudioScraper:
         self.logger.info(f"Output directory: {self.output_dir.resolve()}")
         self.browser_type = browser_type
         self.cdp_port = cdp_port
+        self.account_username = username  # Used for constructing video URLs
 
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
@@ -932,7 +934,10 @@ class TikTokStudioScraper:
             result["metadata"] = metadata
 
             # Determine output folder
-            username = metadata.get("username", "unknown_user")
+            # Use provided account_username if per-video extraction fails
+            username = metadata.get("username")
+            if not username or username == "unknown_user":
+                username = self.account_username or "unknown_user"
             create_date = metadata.get("create_date", timestamp_to_date(None))
             output_folder = self.output_dir / username / create_date
             ensure_directory(output_folder)
@@ -1248,6 +1253,7 @@ async def run_studio_scraper(
     cdp_port: int = None,
     video_scraper=None,
     analyzer=None,
+    username: str = None,
 ) -> dict:
     """
     Main entry point for running the TikTok Studio scraper.
@@ -1261,11 +1267,12 @@ async def run_studio_scraper(
         cdp_port: Custom CDP port for connecting to existing browser
         video_scraper: TikTokScraper instance for downloading videos (optional)
         analyzer: VideoAnalyzer instance for analyzing videos (optional)
+        username: TikTok username for constructing video URLs
 
     Returns:
         Results summary dictionary
     """
-    scraper = TikTokStudioScraper(output_dir, logger, browser_type, cdp_port=cdp_port)
+    scraper = TikTokStudioScraper(output_dir, logger, browser_type, cdp_port=cdp_port, username=username)
 
     try:
         # Initialize and login

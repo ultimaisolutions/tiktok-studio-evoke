@@ -208,6 +208,13 @@ TikTok Studio Mode:
         help="Custom CDP port for connecting to existing browser (default: auto-scan 9222-9229)"
     )
 
+    studio_group.add_argument(
+        "--username",
+        type=str,
+        default=None,
+        help="TikTok username for video URLs (required for Studio mode downloads)"
+    )
+
     return parser.parse_args()
 
 
@@ -388,6 +395,7 @@ def run_studio_mode(args, logger) -> dict:
             cdp_port=args.cdp_port,
             video_scraper=video_scraper,
             analyzer=analyzer,
+            username=args.username,
         )
     )
 
