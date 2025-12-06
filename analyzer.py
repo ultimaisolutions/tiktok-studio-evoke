@@ -81,9 +81,9 @@ class AnalysisConfig:
 THOROUGHNESS_PRESETS: Dict[str, AnalysisConfig] = {
     "quick": AnalysisConfig(
         thoroughness="quick",
-        sample_frames=15,      # ~0.3% of 3-min video at 30fps
+        sample_percentage=0.20,  # 20% of all frames
         color_clusters=4,
-        motion_resolution=120,
+        motion_resolution=360,
         face_model="short",
         use_yolo=False,
         enable_audio=True,
@@ -92,9 +92,9 @@ THOROUGHNESS_PRESETS: Dict[str, AnalysisConfig] = {
     ),
     "balanced": AnalysisConfig(
         thoroughness="balanced",
-        sample_frames=30,      # ~0.6% of 3-min video at 30fps
+        sample_percentage=0.40,  # 40% of all frames
         color_clusters=6,
-        motion_resolution=240,
+        motion_resolution=480,
         face_model="short",
         use_yolo=False,
         enable_audio=True,
@@ -103,36 +103,36 @@ THOROUGHNESS_PRESETS: Dict[str, AnalysisConfig] = {
     ),
     "thorough": AnalysisConfig(
         thoroughness="thorough",
-        sample_frames=50,      # ~1% of 3-min video at 30fps
+        sample_percentage=0.60,  # 60% of all frames
         color_clusters=8,
-        motion_resolution=360,
-        face_model="full",
-        use_yolo=False,
-        enable_audio=True,
-        scene_detection=False,
-        full_resolution=False,
-    ),
-    "maximum": AnalysisConfig(
-        thoroughness="maximum",
-        sample_frames=80,      # ~1.5% of 3-min video at 30fps
-        color_clusters=12,
         motion_resolution=640,
         face_model="full",
         use_yolo=True,
         enable_audio=True,
-        scene_detection=False,
-        full_resolution=False,
+        scene_detection=True,
+        full_resolution=True,
+    ),
+    "maximum": AnalysisConfig(
+        thoroughness="maximum",
+        sample_percentage=0.70,  # 70% of all frames
+        color_clusters=12,
+        motion_resolution=720,
+        face_model="full",
+        use_yolo=True,
+        enable_audio=True,
+        scene_detection=True,
+        full_resolution=True,
     ),
     "extreme": AnalysisConfig(
         thoroughness="extreme",
-        sample_frames=150,     # ~2.8% of 3-min video - every 1.2s
-        color_clusters=16,     # Rich color palette
-        motion_resolution=720, # Near full-res motion analysis
+        sample_percentage=0.80,  # 80% of all frames
+        color_clusters=16,       # Rich color palette
+        motion_resolution=1080,  # High-res motion analysis
         face_model="full",
-        use_yolo=True,         # GPU accelerated person detection
+        use_yolo=True,           # GPU accelerated person detection
         enable_audio=True,
-        scene_detection=True,  # Find cuts/transitions
-        full_resolution=True,  # No downsampling for metrics
+        scene_detection=True,    # Find cuts/transitions
+        full_resolution=True,    # No downsampling for metrics
     ),
 }
 
