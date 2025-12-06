@@ -325,6 +325,17 @@ def run_studio_mode(args, logger) -> dict:
     print(f"  Skip analysis: {args.skip_analysis}")
     print("=" * 50)
 
+    # Create output directory immediately so user can see it
+    output_path = Path(args.output)
+    output_path.mkdir(parents=True, exist_ok=True)
+    absolute_path = output_path.resolve()
+    print(f"\n  Output folder created: {absolute_path}")
+
+    # Verify folder was actually created
+    if not output_path.exists():
+        logger.error(f"Failed to create output directory: {absolute_path}")
+        return {"success": False, "error": f"Cannot create output directory: {absolute_path}"}
+
     # Run the async studio scraper
     results = asyncio.run(
         run_studio_scraper(

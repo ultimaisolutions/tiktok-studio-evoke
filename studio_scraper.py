@@ -53,7 +53,9 @@ class TikTokStudioScraper:
             cdp_port: Custom CDP port for connecting to existing browser
         """
         self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.logger = logger
+        self.logger.info(f"Output directory: {self.output_dir.resolve()}")
         self.browser_type = browser_type
         self.cdp_port = cdp_port
 
@@ -882,6 +884,11 @@ class TikTokStudioScraper:
             output_folder = self.output_dir / username / create_date
             ensure_directory(output_folder)
 
+            # Verify folder was created
+            if not output_folder.exists():
+                raise RuntimeError(f"Failed to create output folder: {output_folder}")
+            self.logger.info(f"  Output folder: {output_folder}")
+
             # Capture screenshots of all 3 tabs
             screenshots = {}
 
@@ -1061,6 +1068,11 @@ class TikTokStudioScraper:
 
             # Take full page screenshot
             await self.page.screenshot(path=str(output_path), full_page=True)
+
+            # Verify file was actually saved
+            if not output_path.exists():
+                self.logger.error(f"    Screenshot NOT saved: {output_path}")
+                return False
 
             self.logger.info(f"    Saved: {output_path.name}")
             return True
