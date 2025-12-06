@@ -969,7 +969,7 @@ class TikTokStudioScraper:
 
             # Extract video URL by clicking thumbnail
             self.logger.info(f"  Extracting video URL...")
-            video_url = await self._extract_video_url(video_id)
+            video_url = await self._extract_video_url(video_id, username=username)
             result["video_url"] = video_url
 
             result["success"] = True
@@ -1156,12 +1156,13 @@ class TikTokStudioScraper:
             self.logger.error(f"    Error capturing screenshot: {e}")
             return False
 
-    async def _extract_video_url(self, video_id: str) -> Optional[str]:
+    async def _extract_video_url(self, video_id: str, username: str = None) -> Optional[str]:
         """
         Extract the TikTok video URL by clicking on the thumbnail.
 
         Args:
             video_id: Video ID for constructing fallback URL
+            username: Username for constructing correct URL format
 
         Returns:
             Video URL string or None
@@ -1195,15 +1196,25 @@ class TikTokStudioScraper:
                 except:
                     continue
 
-            # Fallback: construct URL from video_id
-            # Standard TikTok video URL format
-            fallback_url = f"https://www.tiktok.com/video/{video_id}"
+            # Fallback: construct URL from video_id and username
+            # TikTok video URL format requires username: https://www.tiktok.com/@username/video/{id}
+            if username and username != "unknown_user":
+                # Remove @ prefix if already present
+                clean_username = username.lstrip("@")
+                fallback_url = f"https://www.tiktok.com/@{clean_username}/video/{video_id}"
+            else:
+                # Last resort: try without username (may not work)
+                fallback_url = f"https://www.tiktok.com/video/{video_id}"
+
             self.logger.info(f"    Using fallback URL: {fallback_url}")
             return fallback_url
 
         except Exception as e:
             self.logger.debug(f"Error extracting video URL: {e}")
             # Return constructed URL as fallback
+            if username and username != "unknown_user":
+                clean_username = username.lstrip("@")
+                return f"https://www.tiktok.com/@{clean_username}/video/{video_id}"
             return f"https://www.tiktok.com/video/{video_id}"
 
     async def close(self):
