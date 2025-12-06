@@ -574,12 +574,25 @@ class TikTokStudioScraper:
             self.logger.debug(f"Error checking login status: {e}")
             return False
 
-    async def scrape_all_videos(self) -> dict:
+    async def scrape_all_videos(
+        self,
+        video_scraper=None,
+        analyzer=None,
+        skip_download: bool = False,
+        skip_analysis: bool = False,
+    ) -> dict:
         """
         Scrape all videos from TikTok Studio using batch processing.
 
         Videos are collected and processed in batches, so files appear
-        in real-time as each batch is processed.
+        in real-time as each batch is processed. Optionally downloads
+        and analyzes each video immediately after screenshots.
+
+        Args:
+            video_scraper: TikTokScraper instance for downloading videos
+            analyzer: VideoAnalyzer instance for analyzing videos
+            skip_download: If True, don't download videos
+            skip_analysis: If True, don't analyze videos
 
         Returns:
             Dictionary with results summary
@@ -587,6 +600,8 @@ class TikTokStudioScraper:
         results = {
             "total": 0,
             "processed": 0,
+            "downloaded": 0,
+            "analyzed": 0,
             "skipped": 0,
             "failed": 0,
             "videos": [],
@@ -635,12 +650,37 @@ class TikTokStudioScraper:
                             results["skipped"] += 1
                             continue
 
-                        # Process the video
-                        video_result = await self._process_single_video(video_info)
+                        # Process the video (screenshots + optional download)
+                        video_result = await self._process_single_video(
+                            video_info,
+                            video_scraper=video_scraper if not skip_download else None,
+                        )
 
                         if video_result.get("success"):
                             results["processed"] += 1
                             results["videos"].append(video_result)
+
+                            # Track download status
+                            if video_result.get("downloaded"):
+                                results["downloaded"] += 1
+
+                                # Run analysis immediately after download
+                                if analyzer and not skip_analysis and video_result.get("video_path"):
+                                    self.logger.info(f"  Analyzing video...")
+                                    try:
+                                        analysis_result = analyzer.analyze_video(video_result["video_path"])
+                                        if analysis_result and not analysis_result.errors:
+                                            # Update metadata JSON with analysis
+                                            json_path = video_result.get("json_path")
+                                            if json_path:
+                                                analyzer.update_metadata_file(json_path, analysis_result)
+                                            results["analyzed"] += 1
+                                            self.logger.info(f"  Analysis complete")
+                                        else:
+                                            self.logger.warning(f"  Analysis had errors: {analysis_result.errors if analysis_result else 'No result'}")
+                                    except Exception as e:
+                                        self.logger.error(f"  Analysis failed: {e}")
+
                             self.logger.info(f"  Successfully processed: {video_id}")
                         else:
                             results["failed"] += 1
@@ -659,7 +699,7 @@ class TikTokStudioScraper:
                         self.logger.error(f"  Error processing {video_id}: {e}")
 
                 # Print batch summary
-                print(f"\n  Batch {batch_num} complete: {results['processed']} processed, {results['failed']} failed, {results['skipped']} skipped")
+                print(f"\n  Batch {batch_num} complete: {results['processed']} processed, {results['downloaded']} downloaded, {results['analyzed']} analyzed, {results['failed']} failed")
 
             if results["total"] == 0:
                 self.logger.warning("No videos found in TikTok Studio")
@@ -674,7 +714,7 @@ class TikTokStudioScraper:
                 print("\n" + "=" * 70)
                 print("  BROWSER CLOSED")
                 print("=" * 70)
-                print(f"  Progress saved: {results['processed']} videos processed")
+                print(f"  Progress saved: {results['processed']} processed, {results['downloaded']} downloaded, {results['analyzed']} analyzed")
                 print(f"  Remaining: {results['total'] - results['processed'] - results['skipped']} videos")
                 print("  Exiting gracefully...")
                 print("=" * 70 + "\n")
@@ -855,12 +895,14 @@ class TikTokStudioScraper:
 
         return False
 
-    async def _process_single_video(self, video_info: dict) -> dict:
+    async def _process_single_video(self, video_info: dict, video_scraper=None) -> dict:
         """
-        Process a single video: capture all 3 tab screenshots and extract video URL.
+        Process a single video: capture all 3 tab screenshots, extract video URL,
+        and optionally download the video immediately.
 
         Args:
             video_info: Dictionary with video_id and analytics_url
+            video_scraper: Optional TikTokScraper instance for downloading videos
 
         Returns:
             Result dictionary with success status and data
@@ -871,6 +913,9 @@ class TikTokStudioScraper:
             "video_url": None,
             "screenshots": {},
             "metadata": {},
+            "downloaded": False,
+            "video_path": None,
+            "json_path": None,
         }
 
         try:
@@ -929,6 +974,28 @@ class TikTokStudioScraper:
 
             result["success"] = True
             result["output_folder"] = str(output_folder)
+
+            # Download video immediately if scraper provided
+            if video_scraper and video_url:
+                self.logger.info(f"  Downloading video...")
+                try:
+                    download_success, download_message = video_scraper.download_video(video_url)
+                    if download_success:
+                        self.logger.info(f"  Downloaded: {download_message}")
+                        result["downloaded"] = True
+                        # Set paths for downloaded files
+                        video_path = output_folder / f"{video_id}.mp4"
+                        json_path = output_folder / f"{video_id}.json"
+                        if video_path.exists():
+                            result["video_path"] = str(video_path)
+                        if json_path.exists():
+                            result["json_path"] = str(json_path)
+                    else:
+                        self.logger.warning(f"  Download failed: {download_message}")
+                        result["download_error"] = download_message
+                except Exception as e:
+                    self.logger.error(f"  Download error: {e}")
+                    result["download_error"] = str(e)
 
         except Exception as e:
             result["error"] = str(e)
@@ -1168,6 +1235,8 @@ async def run_studio_scraper(
     skip_download: bool = False,
     skip_analysis: bool = False,
     cdp_port: int = None,
+    video_scraper=None,
+    analyzer=None,
 ) -> dict:
     """
     Main entry point for running the TikTok Studio scraper.
@@ -1179,6 +1248,8 @@ async def run_studio_scraper(
         skip_download: If True, only capture screenshots
         skip_analysis: If True, skip video analysis
         cdp_port: Custom CDP port for connecting to existing browser
+        video_scraper: TikTokScraper instance for downloading videos (optional)
+        analyzer: VideoAnalyzer instance for analyzing videos (optional)
 
     Returns:
         Results summary dictionary
@@ -1190,8 +1261,13 @@ async def run_studio_scraper(
         if not await scraper.initialize():
             return {"success": False, "error": "Failed to initialize/login"}
 
-        # Scrape all videos
-        results = await scraper.scrape_all_videos()
+        # Scrape all videos, with optional immediate download and analysis
+        results = await scraper.scrape_all_videos(
+            video_scraper=video_scraper,
+            analyzer=analyzer,
+            skip_download=skip_download,
+            skip_analysis=skip_analysis,
+        )
         results["success"] = True
 
         return results

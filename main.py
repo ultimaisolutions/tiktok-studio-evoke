@@ -256,6 +256,8 @@ def print_studio_summary(results: dict):
     print("=" * 50)
     print(f"  Total videos:  {results.get('total', 0)}")
     print(f"  Processed:     {results.get('processed', 0)}")
+    print(f"  Downloaded:    {results.get('downloaded', 0)}")
+    print(f"  Analyzed:      {results.get('analyzed', 0)}")
     print(f"  Skipped:       {results.get('skipped', 0)}")
     print(f"  Failed:        {results.get('failed', 0)}")
     print("=" * 50)
@@ -305,7 +307,10 @@ def save_urls_log(output_dir: str, videos: list, logger) -> str:
 
 def run_studio_mode(args, logger) -> dict:
     """
-    Run TikTok Studio scraping mode.
+    Run TikTok Studio scraping mode with fully incremental processing.
+
+    Each video is fully processed (screenshots + download + analysis) before
+    moving to the next, so progress is preserved if interrupted.
 
     Args:
         args: Parsed command line arguments
@@ -315,9 +320,10 @@ def run_studio_mode(args, logger) -> dict:
         Results dictionary
     """
     from studio_scraper import run_studio_scraper
+    from analyzer import VideoAnalyzer, get_config
 
     print("\n" + "=" * 50)
-    print("  TIKTOK STUDIO MODE")
+    print("  TIKTOK STUDIO MODE (Incremental)")
     print("=" * 50)
     print(f"  Output dir:    {args.output}")
     print(f"  Browser:       {args.studio_browser}")
@@ -336,7 +342,42 @@ def run_studio_mode(args, logger) -> dict:
         logger.error(f"Failed to create output directory: {absolute_path}")
         return {"success": False, "error": f"Cannot create output directory: {absolute_path}"}
 
-    # Run the async studio scraper
+    # Initialize video scraper for downloading (if not skipping)
+    video_scraper = None
+    if not args.skip_download:
+        print("\n  Initializing video downloader...")
+        video_scraper = TikTokScraper(args.output, logger)
+        video_scraper.initialize_browser(args.browser, required=False)
+
+    # Initialize analyzer (if not skipping)
+    analyzer = None
+    if not args.skip_download and not args.skip_analysis:
+        print("  Initializing video analyzer...")
+        # Override defaults for Studio mode: extreme thoroughness, 50% frame sampling
+        if args.thoroughness == "balanced":
+            args.thoroughness = "extreme"
+        if args.sample_percent is None:
+            args.sample_percent = 50
+
+        config = get_config(
+            preset=args.thoroughness,
+            sample_frames=args.sample_frames,
+            sample_percentage=args.sample_percent,
+            color_clusters=args.color_clusters,
+            motion_resolution=args.motion_res,
+            face_model=args.face_model,
+            enable_audio=not args.skip_audio,
+            workers=args.workers,
+            scene_detection=args.scene_detection if args.scene_detection else None,
+            full_resolution=args.full_resolution if args.full_resolution else None,
+        )
+        analyzer = VideoAnalyzer(config, logger)
+        print(f"  Analysis preset: {args.thoroughness}, {args.sample_percent}% frame sampling")
+
+    print("\n  Starting incremental processing...")
+    print("  (Each video: screenshots → download → analyze)")
+
+    # Run the async studio scraper with integrated download and analysis
     results = asyncio.run(
         run_studio_scraper(
             output_dir=args.output,
@@ -345,6 +386,8 @@ def run_studio_mode(args, logger) -> dict:
             skip_download=args.skip_download,
             skip_analysis=args.skip_analysis,
             cdp_port=args.cdp_port,
+            video_scraper=video_scraper,
+            analyzer=analyzer,
         )
     )
 
@@ -357,61 +400,6 @@ def run_studio_mode(args, logger) -> dict:
     # Save extracted URLs to log file
     if results.get("videos"):
         save_urls_log(args.output, results["videos"], logger)
-
-    # If not skipping download, download the videos
-    if not args.skip_download and results.get("videos"):
-        print("\n" + "=" * 50)
-        print("  DOWNLOADING VIDEOS")
-        print("=" * 50)
-
-        # Initialize scraper for downloading
-        scraper = TikTokScraper(args.output, logger)
-
-        # Try to initialize browser cookies
-        scraper.initialize_browser(args.browser, required=False)
-
-        # Download each video
-        download_results = {
-            "total": 0,
-            "success": 0,
-            "failed": 0,
-            "successful_urls": [],
-            "failed_urls": [],
-        }
-
-        for video_info in results["videos"]:
-            video_url = video_info.get("video_url")
-            if not video_url:
-                continue
-
-            download_results["total"] += 1
-            logger.info(f"Downloading: {video_url}")
-
-            success, message = scraper.download_video(video_url)
-            if success:
-                download_results["success"] += 1
-                download_results["successful_urls"].append({"url": video_url, "message": message})
-                logger.info(f"SUCCESS: {message}")
-            else:
-                download_results["failed"] += 1
-                download_results["failed_urls"].append({"url": video_url, "error": message})
-                logger.warning(f"FAILED: {message}")
-
-        print_summary(download_results)
-        results["download_results"] = download_results
-
-    # If not skipping analysis, analyze the videos
-    if not args.skip_download and not args.skip_analysis:
-        # Override defaults for Studio mode: extreme thoroughness, 50% frame sampling
-        if args.thoroughness == "balanced":  # Only override if using default
-            args.thoroughness = "extreme"
-        if args.sample_percent is None:
-            args.sample_percent = 50
-
-        print(f"\nRunning analysis with {args.thoroughness} preset and {args.sample_percent}% frame sampling...")
-        analysis_summary = run_analysis(args, logger)
-        print_analysis_summary(analysis_summary)
-        results["analysis_summary"] = analysis_summary
 
     return results
 
