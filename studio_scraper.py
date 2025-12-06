@@ -576,7 +576,10 @@ class TikTokStudioScraper:
 
     async def scrape_all_videos(self) -> dict:
         """
-        Scrape all videos from TikTok Studio.
+        Scrape all videos from TikTok Studio using batch processing.
+
+        Videos are collected and processed in batches, so files appear
+        in real-time as each batch is processed.
 
         Returns:
             Dictionary with results summary
@@ -604,51 +607,62 @@ class TikTokStudioScraper:
                 await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=60000)
                 await self.page.wait_for_timeout(3000)
 
-            # Get list of videos from the sidebar
-            video_elements = await self._get_video_list()
+            # Process videos in batches as they are discovered
+            batch_num = 0
+            global_idx = 0
 
-            if not video_elements:
-                self.logger.warning("No videos found in TikTok Studio")
-                return results
+            async for video_batch in self._get_video_list_batched(batch_size=50):
+                batch_num += 1
+                batch_size = len(video_batch)
+                results["total"] += batch_size
 
-            results["total"] = len(video_elements)
-            self.logger.info(f"Found {len(video_elements)} videos to process")
+                print(f"\n{'=' * 60}")
+                print(f"  PROCESSING BATCH {batch_num} ({batch_size} videos)")
+                print(f"  Total discovered so far: {results['total']}")
+                print(f"{'=' * 60}")
 
-            # Process each video
-            for idx, video_info in enumerate(video_elements, 1):
-                video_id = video_info.get("video_id", f"unknown_{idx}")
+                # Process each video in the batch
+                for batch_idx, video_info in enumerate(video_batch, 1):
+                    global_idx += 1
+                    video_id = video_info.get("video_id", f"unknown_{global_idx}")
 
-                self.logger.info(f"\n[{idx}/{len(video_elements)}] Processing video: {video_id}")
+                    self.logger.info(f"\n[Batch {batch_num}, {batch_idx}/{batch_size}] Processing video: {video_id}")
 
-                try:
-                    # Check if already processed
-                    if self._is_video_processed(video_id):
-                        self.logger.info(f"  Skipping (already processed): {video_id}")
-                        results["skipped"] += 1
-                        continue
+                    try:
+                        # Check if already processed
+                        if self._is_video_processed(video_id):
+                            self.logger.info(f"  Skipping (already processed): {video_id}")
+                            results["skipped"] += 1
+                            continue
 
-                    # Process the video
-                    video_result = await self._process_single_video(video_info)
+                        # Process the video
+                        video_result = await self._process_single_video(video_info)
 
-                    if video_result.get("success"):
-                        results["processed"] += 1
-                        results["videos"].append(video_result)
-                        self.logger.info(f"  Successfully processed: {video_id}")
-                    else:
+                        if video_result.get("success"):
+                            results["processed"] += 1
+                            results["videos"].append(video_result)
+                            self.logger.info(f"  Successfully processed: {video_id}")
+                        else:
+                            results["failed"] += 1
+                            results["errors"].append({
+                                "video_id": video_id,
+                                "error": video_result.get("error", "Unknown error")
+                            })
+                            self.logger.warning(f"  Failed to process: {video_id}")
+
+                    except Exception as e:
                         results["failed"] += 1
                         results["errors"].append({
                             "video_id": video_id,
-                            "error": video_result.get("error", "Unknown error")
+                            "error": str(e)
                         })
-                        self.logger.warning(f"  Failed to process: {video_id}")
+                        self.logger.error(f"  Error processing {video_id}: {e}")
 
-                except Exception as e:
-                    results["failed"] += 1
-                    results["errors"].append({
-                        "video_id": video_id,
-                        "error": str(e)
-                    })
-                    self.logger.error(f"  Error processing {video_id}: {e}")
+                # Print batch summary
+                print(f"\n  Batch {batch_num} complete: {results['processed']} processed, {results['failed']} failed, {results['skipped']} skipped")
+
+            if results["total"] == 0:
+                self.logger.warning("No videos found in TikTok Studio")
 
             return results
 
@@ -671,19 +685,22 @@ class TikTokStudioScraper:
                 # Re-raise other exceptions
                 raise
 
-    async def _get_video_list(self) -> list:
+    async def _get_video_list_batched(self, batch_size: int = 50):
         """
-        Get list of all videos from TikTok Studio sidebar.
+        Get videos from TikTok Studio sidebar and yield them in batches.
 
-        The sidebar contains video buttons with infinite scroll/lazy loading.
-        Videos are buttons (not links) that use JavaScript navigation.
-        Video IDs are extracted by clicking each button and capturing the URL change.
+        This is an async generator that yields batches of videos as they are
+        collected, allowing processing to start before all videos are discovered.
 
-        Returns:
-            List of video info dictionaries
+        Args:
+            batch_size: Number of videos per batch (default: 50)
+
+        Yields:
+            List of video info dictionaries (batch_size at a time)
         """
         videos = []
         seen_video_ids = set()
+        total_yielded = 0
 
         try:
             self.logger.info("Loading video list from sidebar...")
@@ -698,7 +715,6 @@ class TikTokStudioScraper:
             await self.page.wait_for_timeout(1000)
 
             # Find the scrollable container (sidebar video list)
-            # Common selector patterns for scrollable containers
             sidebar_selectors = [
                 '[data-e2e="components_analytics_VideoSelector_VideoSelectContainer"]',
                 '[class*="VideoSelector"]',
@@ -723,10 +739,9 @@ class TikTokStudioScraper:
             self.logger.info("Loading all videos via infinite scroll...")
             previous_count = 0
             scroll_attempts = 0
-            max_scroll_attempts = 50  # Prevent infinite loops
+            max_scroll_attempts = 50
 
             while scroll_attempts < max_scroll_attempts:
-                # Count current video buttons
                 video_buttons = await self.page.query_selector_all(
                     'button img[data-tt="components_AnalyticsVideoSelector_Image"]'
                 )
@@ -734,24 +749,19 @@ class TikTokStudioScraper:
 
                 self.logger.info(f"Scroll attempt {scroll_attempts + 1}: Found {current_count} videos")
 
-                # If count hasn't changed, we've reached the end
                 if current_count == previous_count and scroll_attempts > 0:
                     self.logger.info("No new videos loaded, finished scrolling")
                     break
 
                 previous_count = current_count
 
-                # Scroll to bottom of sidebar
                 if sidebar_container:
-                    # Scroll the sidebar container
                     await self.page.evaluate('''(element) => {
                         element.scrollTop = element.scrollHeight;
                     }''', sidebar_container)
                 else:
-                    # Fallback: scroll the page
                     await self.page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
 
-                # Wait for new videos to load
                 await self.page.wait_for_timeout(1500)
                 scroll_attempts += 1
 
@@ -762,46 +772,31 @@ class TikTokStudioScraper:
 
             self.logger.info(f"Found {len(video_images)} total video images after scrolling")
 
-            # Get button elements directly (not via evaluate_handle)
-            # Use :has() CSS pseudo-class to find buttons that contain our images
             self.logger.info("Getting clickable button elements...")
             video_buttons = await self.page.query_selector_all('button:has(img[data-tt="components_AnalyticsVideoSelector_Image"])')
 
             self.logger.info(f"Found {len(video_buttons)} clickable video buttons")
 
-            # Store current URL to detect changes
-            initial_url = self.page.url
-
-            # Click each button to extract video ID from URL change
+            # Click each button to extract video ID, yield in batches
             for idx, button in enumerate(video_buttons, 1):
                 try:
                     # Log progress every 50 videos
                     if idx % 50 == 0:
-                        self.logger.info(f"Processing video button {idx}/{len(video_buttons)}...")
+                        self.logger.info(f"Extracting video ID {idx}/{len(video_buttons)}...")
 
-                    # Click the button to navigate to its analytics page
                     await button.click()
-
-                    # Wait for URL to change
                     await self.page.wait_for_timeout(300)
 
-                    # Get new URL
                     new_url = self.page.url
-
-                    # Extract video ID from URL
-                    # URL pattern: https://www.tiktok.com/tiktokstudio/analytics/{video_id}/overview
                     match = re.search(r'/analytics/(\d+)', new_url)
 
                     if match:
                         video_id = match.group(1)
 
-                        # Skip duplicates
                         if video_id in seen_video_ids:
                             continue
 
                         seen_video_ids.add(video_id)
-
-                        # Build analytics URL
                         analytics_url = f"https://www.tiktok.com/tiktokstudio/analytics/{video_id}/overview"
 
                         videos.append({
@@ -811,19 +806,32 @@ class TikTokStudioScraper:
 
                         self.logger.debug(f"  [{idx}] Found video: {video_id}")
 
+                        # Yield batch when we have enough videos
+                        if len(videos) >= batch_size:
+                            total_yielded += len(videos)
+                            self.logger.info(f"Yielding batch of {len(videos)} videos (total yielded: {total_yielded})")
+                            yield videos
+                            videos = []
+
                 except Exception as e:
                     self.logger.debug(f"Error processing button {idx}: {e}")
                     continue
 
-            self.logger.info(f"Successfully extracted {len(videos)} unique video IDs")
+            # Yield any remaining videos
+            if videos:
+                total_yielded += len(videos)
+                self.logger.info(f"Yielding final batch of {len(videos)} videos (total yielded: {total_yielded})")
+                yield videos
 
-            return videos
+            self.logger.info(f"Successfully extracted {total_yielded} unique video IDs")
 
         except Exception as e:
             self.logger.error(f"Error getting video list: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return []
+            # Yield any videos we collected before the error
+            if videos:
+                yield videos
 
     def _is_video_processed(self, video_id: str) -> bool:
         """
