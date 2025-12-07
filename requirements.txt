@@ -20,5 +20,6 @@ scikit-image>=0.21.0
 ultralytics>=8.0.0
 
 # OCR dependencies (for tiktok_studio_ocr.py)
-pytesseract
+google-cloud-vision>=3.5.0
 pillow
+# pytesseract  # Optional: kept for fallback mode when Vision API fails

@@ -9,6 +9,7 @@ A Python-based tool for **automating TikTok Studio analytics extraction**, downl
 
 ### TikTok Studio Automation (NEW)
 - **Automated screenshots** of all 3 analytics tabs (Overview, Viewers, Engagement)
+- **OCR extraction** using Google Cloud Vision API with Tesseract fallback
 - **Cookie-based login** with manual fallback
 - **Incremental processing** - skips already processed videos
 - **URL logging** - saves extracted URLs for reference
@@ -76,7 +77,76 @@ pip install -r requirements.txt
 playwright install
 ```
 
-### 5. Optional: Install MediaPipe (Python < 3.13 only)
+### 5. Configure Google Cloud Vision API (for OCR)
+
+The OCR module uses Google Cloud Vision API for extracting analytics data from screenshots.
+
+#### First-Time Setup (Create Credentials)
+
+1. **Create a Google Cloud Project** at [Google Cloud Console](https://console.cloud.google.com)
+2. **Enable Cloud Vision API** in your project
+3. **Create a Service Account** with "Cloud Vision API User" role
+4. **Download the JSON key file** (e.g., `evoke-ocr-xxxxxx.json`)
+
+#### Copy Credentials to Your Machine
+
+**IMPORTANT:** Copy the JSON credentials file to your machine. This file is required for OCR to work.
+
+- Store it in a secure location (e.g., project root or a dedicated credentials folder)
+- **DO NOT** commit this file to version control (add it to `.gitignore`)
+
+#### Set Environment Variable
+
+Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to your JSON key file:
+
+**macOS/Linux (recommended - add to ~/.zshrc or ~/.bashrc for persistence):**
+```bash
+# One-time use
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/evoke-ocr-credentials.json"
+
+# Permanent (add this line to ~/.zshrc or ~/.bashrc)
+echo 'export GOOGLE_APPLICATION_CREDENTIALS="/path/to/evoke-ocr-credentials.json"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\evoke-ocr-credentials.json"
+```
+
+**Windows (cmd):**
+```cmd
+set GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\evoke-ocr-credentials.json
+```
+
+#### Verify Setup
+
+Test that the credentials are configured correctly:
+```bash
+python -c "import os; print(os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'NOT SET'))"
+```
+
+**Cost:** First 1,000 images/month are FREE, then $1.50 per 1,000 images.
+
+### 6. Optional: Install Tesseract (OCR Fallback)
+
+If Google Cloud Vision API fails, the tool can fall back to Tesseract OCR:
+
+**Windows:** Download from [UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+
+**Linux:**
+```bash
+sudo apt-get install tesseract-ocr tesseract-ocr-heb
+pip install pytesseract
+```
+
+**macOS:**
+```bash
+brew install tesseract
+pip install pytesseract
+```
+
+### 7. Optional: Install MediaPipe (Python < 3.13 only)
 
 ```bash
 pip install mediapipe>=0.10.0
@@ -133,6 +203,29 @@ python main.py --studio -o my_data/
 4. Saves URLs to log file: `studio_urls_{timestamp}.txt`
 5. Downloads videos using existing scraper
 6. Analyzes with `extreme` preset + 50% frame sampling
+
+### OCR Extraction (Analytics Screenshots)
+
+Extract analytics data from TikTok Studio screenshots using Google Cloud Vision API:
+
+```bash
+# Extract analytics from a single screenshot
+python tiktok_studio_ocr.py screenshot.png -o results.json
+
+# Process all 3 tabs at once
+python tiktok_studio_ocr.py overview.png viewers.png engagement.png -o analytics.json
+
+# Disable Tesseract fallback
+python tiktok_studio_ocr.py --no-fallback screenshot.png
+
+# Show raw OCR text in output
+python tiktok_studio_ocr.py --show-raw screenshot.png
+```
+
+**Extracted Metrics:**
+- **Overview tab:** Views, likes, comments, shares, saves, followers, watch time, traffic sources
+- **Viewers tab:** Total viewers, demographics, gender, age groups, locations
+- **Engagement tab:** Likes timestamp, top comment words
 
 ### Standard Mode (URL-based)
 
@@ -364,6 +457,24 @@ main.py (CLI & orchestration)
 
 **Windows:** Run terminal as Administrator if encountering permission issues with cookie extraction.
 
+### Google Cloud Vision API Issues
+
+**Error:** "GOOGLE_APPLICATION_CREDENTIALS environment variable not set"
+
+**Solution:**
+1. Download your service account JSON key from Google Cloud Console
+2. Set the environment variable:
+   - Windows: `set GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\credentials.json`
+   - Linux/macOS: `export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json`
+
+**Error:** "Vision API error" or network timeout
+
+**Solution:** The tool automatically retries with exponential backoff. If it persists:
+- Check your internet connection
+- Verify the Vision API is enabled in your Google Cloud project
+- Check your API quota in Google Cloud Console
+- Use `--no-fallback` to see the actual error (fallback to Tesseract is enabled by default)
+
 ## Dependencies
 
 ### Core
@@ -380,11 +491,16 @@ main.py (CLI & orchestration)
 - `moviepy` (>=1.0.3) - Audio extraction
 - `scikit-image` (>=0.21.0) - Image analysis
 
+### OCR (Screenshot Analytics Extraction)
+- `google-cloud-vision` (>=3.5.0) - Google Cloud Vision API for OCR
+- `pillow` - Image processing
+
 ### GPU Acceleration
 - `ultralytics` (>=8.0.0) - YOLO for maximum/extreme presets
 
 ### Optional
 - `mediapipe` (>=0.10.0) - Face/pose detection (Python < 3.13)
+- `pytesseract` - Tesseract OCR fallback when Vision API fails
 
 ## Disclaimers
 

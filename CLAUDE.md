@@ -155,7 +155,53 @@ videos/
 
 **GPU:** ultralytics (>=8.0.0) - YOLO for maximum/extreme presets
 
+**OCR:** google-cloud-vision (>=3.5.0), pillow
+
 **Optional:** mediapipe (>=0.10.0) - requires Python <3.13, falls back to Haar cascades
+
+**Optional:** pytesseract - Tesseract OCR fallback when Vision API fails
+
+## OCR Configuration (Google Cloud Vision API)
+
+The OCR module (`tiktok_studio_ocr.py`) uses Google Cloud Vision API for text extraction from analytics screenshots.
+
+### Setup
+
+1. Set the environment variable to your Google Cloud credentials file:
+
+```bash
+# Windows (PowerShell)
+$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\Ultim AI Solutions\Evoke\evoke-ocr-a21cdd601317.json"
+
+# Windows (cmd)
+set GOOGLE_APPLICATION_CREDENTIALS=C:\Ultim AI Solutions\Evoke\evoke-ocr-a21cdd601317.json
+
+# Linux/macOS
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+```
+
+### Usage
+
+```bash
+# Extract analytics from screenshots
+python tiktok_studio_ocr.py image.png -o results.json
+
+# Process multiple screenshots
+python tiktok_studio_ocr.py overview.png viewers.png engagement.png
+
+# Disable Tesseract fallback
+python tiktok_studio_ocr.py --no-fallback image.png
+```
+
+### Fallback Behavior
+
+If Google Cloud Vision API fails (network issues, quota exceeded), the OCR automatically falls back to Tesseract OCR if installed. Use `--no-fallback` to disable this behavior.
+
+### Cost Considerations
+
+- First 1,000 images/month: FREE
+- 1,001+ images: $1.50 per 1,000 images
+- Typical usage: 3 screenshots per video (overview, viewers, engagement)
 
 ## Known Issues
 
