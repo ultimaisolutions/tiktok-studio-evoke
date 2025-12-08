@@ -384,7 +384,7 @@ class TikTokStudioScraper:
 
             # Use existing login check logic
             # Wait a moment for page to settle
-            await page.wait_for_timeout(500)
+            await asyncio.sleep(0.5)
 
             current_url = page.url
 
@@ -679,7 +679,7 @@ class TikTokStudioScraper:
         """
         try:
             # Wait a moment for page to settle
-            await self.page.wait_for_timeout(500)
+            await asyncio.sleep(0.5)
 
             current_url = self.page.url
 
@@ -749,12 +749,12 @@ class TikTokStudioScraper:
             # User already has the correct analytics page open with sidebar
             if self._connected_to_existing:
                 self.logger.info("Using current page from CDP connection (already on analytics page)")
-                await self.page.wait_for_timeout(1000)
+                await asyncio.sleep(1)
             else:
                 # Launched new browser - navigate to Studio home (NOT /content)
                 # Studio home will show analytics page with sidebar
                 await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
-                await self.page.wait_for_timeout(3000)
+                await asyncio.sleep(3)
 
             # Process videos in batches as they are discovered
             batch_num = 0
@@ -859,9 +859,151 @@ class TikTokStudioScraper:
                 # Re-raise other exceptions
                 raise
 
+    async def _get_cookies_for_api(self) -> dict:
+        """
+        Extract cookies from the Playwright browser session for API requests.
+
+        Returns:
+            Dictionary of cookies suitable for requests library
+        """
+        cookies = await self.context.cookies()
+        return {cookie['name']: cookie['value'] for cookie in cookies}
+
+    def _get_api_params(self) -> dict:
+        """
+        Get standard query parameters for TikTok Studio API requests.
+
+        Returns:
+            Dictionary of query parameters
+        """
+        import time
+        return {
+            'aid': '1988',
+            'app_language': 'en',
+            'app_name': 'tiktok_creator_center',
+            'browser_language': 'en-US',
+            'browser_name': 'Mozilla',
+            'browser_platform': 'Win32',
+            'channel': 'tiktok_web',
+            'device_platform': 'web_pc',
+            'priority_region': '',
+            'region': '',
+        }
+
+    def _fetch_video_list_page(self, cookies: dict, params: dict, cursor: int) -> dict:
+        """
+        Synchronous helper to fetch a single page of video list from API.
+
+        Args:
+            cookies: Session cookies
+            params: API parameters
+            cursor: Pagination cursor
+
+        Returns:
+            API response as dictionary
+        """
+        import requests
+
+        base_url = "https://www.tiktok.com/api/creator/item/list/"
+        request_params = {**params, 'cursor': cursor, 'count': 50}
+
+        response = requests.get(base_url, params=request_params, cookies=cookies, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    async def _get_video_list_via_api(self) -> list:
+        """
+        Fetch video list using TikTok Studio's internal API.
+
+        This is much faster than UI automation as it fetches all videos in bulk
+        with pagination, and includes video metadata and download URLs.
+
+        Returns:
+            List of video info dictionaries with metadata and playAddr (download URLs)
+        """
+        self.logger.info("Attempting to fetch video list via API...")
+
+        try:
+            # Get cookies from browser session
+            cookies = await self._get_cookies_for_api()
+            params = self._get_api_params()
+
+            all_videos = []
+            cursor = 0
+            has_more = True
+            loop = asyncio.get_event_loop()
+
+            while has_more:
+                self.logger.info(f"Fetching videos from API (cursor={cursor})...")
+
+                # Run synchronous request in executor
+                data = await loop.run_in_executor(
+                    None,
+                    lambda c=cursor: self._fetch_video_list_page(cookies, params, c)
+                )
+
+                # Check for errors - handle both status formats
+                status = data.get('status_code', data.get('statusCode', -1))
+                if status != 0 and status != -1:
+                    self.logger.warning(f"API error: {data.get('status_msg', data.get('statusMsg', 'Unknown'))}")
+                    break
+
+                # Extract video items - handle different response formats
+                items = data.get('item_list', data.get('itemList', data.get('items', [])))
+
+                if not items:
+                    self.logger.info("No more videos in API response")
+                    break
+
+                for item in items:
+                    # Handle different field naming conventions (camelCase vs snake_case)
+                    video_id = str(item.get('item_id', item.get('itemId', '')))
+                    if not video_id:
+                        continue
+
+                    video_info = {
+                        'video_id': video_id,
+                        'analytics_url': f"https://www.tiktok.com/tiktokstudio/analytics/{video_id}/overview",
+                        # Include metadata from API
+                        'api_metadata': {
+                            'desc': item.get('desc', ''),
+                            'create_time': item.get('create_time', item.get('createTime', 0)),
+                            'duration': item.get('duration', 0),
+                            'play_count': item.get('playCount', item.get('play_count', 0)),
+                            'like_count': item.get('LikeCount', item.get('like_count', item.get('likeCount', 0))),
+                            'comment_count': item.get('comment_count', item.get('commentCount', 0)),
+                            'share_count': item.get('share_count', item.get('shareCount', 0)),
+                            'favorite_count': item.get('favorite_count', item.get('favoriteCount', 0)),
+                            'cover_url': item.get('cover_url', item.get('coverUrl', [])),
+                            'play_addr': item.get('playAddr', item.get('play_addr', [])),
+                        }
+                    }
+                    all_videos.append(video_info)
+
+                self.logger.info(f"Fetched {len(items)} videos (total: {len(all_videos)})")
+
+                # Check for more pages
+                has_more = data.get('has_more', data.get('hasMore', False))
+                cursor = data.get('cursor', cursor + len(items))
+
+                # Small delay between requests
+                await asyncio.sleep(0.3)
+
+            self.logger.info(f"API fetch complete: {len(all_videos)} videos found")
+            return all_videos
+
+        except Exception as e:
+            self.logger.warning(f"API fetch failed: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return []
+
     async def _get_video_list_batched(self, batch_size: int = 50):
         """
         Get videos from TikTok Studio sidebar and yield them in batches.
+
+        First attempts to fetch via API (much faster), falls back to UI automation
+        if API fails.
 
         This is an async generator that yields batches of videos as they are
         collected, allowing processing to start before all videos are discovered.
@@ -872,6 +1014,25 @@ class TikTokStudioScraper:
         Yields:
             List of video info dictionaries (batch_size at a time)
         """
+        # First, try API-based fetching (much faster)
+        try:
+            api_videos = await self._get_video_list_via_api()
+            if api_videos:
+                self.logger.info(f"Successfully fetched {len(api_videos)} videos via API!")
+
+                # Yield in batches
+                for i in range(0, len(api_videos), batch_size):
+                    batch = api_videos[i:i + batch_size]
+                    self.logger.info(f"Yielding API batch {i // batch_size + 1} ({len(batch)} videos)")
+                    yield batch
+
+                return  # API succeeded, no need for UI automation
+        except Exception as e:
+            self.logger.warning(f"API fetch failed, falling back to UI automation: {e}")
+
+        # Fallback: UI automation (scrolling + clicking)
+        self.logger.info("Using UI automation to fetch video list...")
+
         videos = []
         seen_video_ids = set()
         total_yielded = 0
@@ -886,7 +1047,7 @@ class TikTokStudioScraper:
             except:
                 self.logger.warning("Sidebar selector not found, continuing anyway")
 
-            await self.page.wait_for_timeout(1000)
+            await asyncio.sleep(1)
 
             # Find the scrollable container (sidebar video list)
             sidebar_selectors = [
@@ -936,7 +1097,7 @@ class TikTokStudioScraper:
                 else:
                     await self.page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
 
-                await self.page.wait_for_timeout(1500)
+                await asyncio.sleep(1.5)
                 scroll_attempts += 1
 
             # Get all video button elements after scrolling
@@ -959,7 +1120,7 @@ class TikTokStudioScraper:
                         self.logger.info(f"Extracting video ID {idx}/{len(video_buttons)}...")
 
                     await button.click()
-                    await self.page.wait_for_timeout(300)
+                    await asyncio.sleep(0.3)
 
                     new_url = self.page.url
                     match = re.search(r'/analytics/(\d+)', new_url)
@@ -1059,7 +1220,7 @@ class TikTokStudioScraper:
             # Navigate to video analytics page
             self.logger.info(f"  Navigating to analytics: {analytics_url}")
             await self.page.goto(analytics_url, wait_until="networkidle", timeout=60000)
-            await self.page.wait_for_timeout(3000)
+            await asyncio.sleep(3)
 
             # Extract metadata from page (username, date, etc.)
             metadata = await self._extract_video_metadata()
@@ -1237,7 +1398,7 @@ class TikTokStudioScraper:
                     element = await self.page.query_selector(selector)
                     if element:
                         await element.click()
-                        await self.page.wait_for_timeout(2000)  # Wait for tab content to load
+                        await asyncio.sleep(2)  # Wait for tab content to load
                         return True
                 except:
                     continue
@@ -1254,7 +1415,7 @@ class TikTokStudioScraper:
                 base_url = re.sub(r'/(viewers|engagement)$', '', current_url)
                 new_url = base_url + tab_url_suffix[tab_name]
                 await self.page.goto(new_url, wait_until="networkidle", timeout=30000)
-                await self.page.wait_for_timeout(2000)
+                await asyncio.sleep(2)
                 return True
 
             return False
@@ -1276,7 +1437,7 @@ class TikTokStudioScraper:
         """
         try:
             # Wait for content to fully load
-            await self.page.wait_for_timeout(1500)
+            await asyncio.sleep(1.5)
 
             # Take full page screenshot
             await self.page.screenshot(path=str(output_path), full_page=True)

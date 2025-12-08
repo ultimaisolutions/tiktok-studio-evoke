@@ -35,6 +35,87 @@ def _run_async_in_thread(coro):
         loop.close()
 
 
+def _run_full_session_sync(scraper, video_scraper, analyzer, skip_download, skip_analysis):
+    """
+    Run entire scraper session in a SINGLE event loop.
+
+    This is critical - Playwright objects (browser, page) are bound to the event loop
+    they were created in. Running init and scrape in separate loops causes errors.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        # Initialize browser
+        success = loop.run_until_complete(scraper.initialize(interactive=False))
+        if not success:
+            # Login required - return early, browser stays open
+            # Note: The loop stays open so we can continue later
+            return {"needs_login": True, "loop": loop}
+
+        # Run scraping in the SAME loop
+        results = loop.run_until_complete(scraper.scrape_all_videos(
+            video_scraper=video_scraper,
+            analyzer=analyzer,
+            skip_download=skip_download,
+            skip_analysis=skip_analysis,
+        ))
+
+        # Clean up
+        loop.run_until_complete(scraper.close())
+        loop.close()
+
+        return {"success": True, "results": results}
+    except Exception as e:
+        # Try to close scraper on error
+        try:
+            loop.run_until_complete(scraper.close())
+        except:
+            pass
+        try:
+            loop.close()
+        except:
+            pass
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+def _continue_session_after_login_sync(scraper, loop, video_scraper, analyzer, skip_download, skip_analysis):
+    """
+    Continue scraper session after manual login, using the SAME event loop.
+    """
+    asyncio.set_event_loop(loop)
+    try:
+        # Verify login
+        is_logged_in = loop.run_until_complete(scraper._check_logged_in())
+        if not is_logged_in:
+            return {"error": "Not logged in after manual login"}
+
+        scraper._is_logged_in = True
+
+        # Run scraping in the SAME loop
+        results = loop.run_until_complete(scraper.scrape_all_videos(
+            video_scraper=video_scraper,
+            analyzer=analyzer,
+            skip_download=skip_download,
+            skip_analysis=skip_analysis,
+        ))
+
+        # Clean up
+        loop.run_until_complete(scraper.close())
+        loop.close()
+
+        return {"success": True, "results": results}
+    except Exception as e:
+        try:
+            loop.run_until_complete(scraper.close())
+        except:
+            pass
+        try:
+            loop.close()
+        except:
+            pass
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
 # Thread pool for running Playwright operations
 _playwright_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="playwright")
 
@@ -47,6 +128,7 @@ class StudioService:
         self.logger = logging.getLogger(__name__)
         self._active_sessions: Dict[str, Dict[str, Any]] = {}
         self._scrapers: Dict[str, TikTokStudioScraper] = {}
+        self._session_loops: Dict[str, asyncio.AbstractEventLoop] = {}  # Store event loops for login flow
 
     async def start_session(self, request: StudioRequest) -> str:
         """
@@ -73,8 +155,6 @@ class StudioService:
     async def _run_studio_session(self, session_id: str, request: StudioRequest, continue_from_login: bool = False) -> None:
         """Run Studio scraping session with progress updates."""
         try:
-            scraper = self._scrapers.get(session_id)
-
             if not continue_from_login:
                 # Fresh start - create new scraper
                 self._active_sessions[session_id]["status"] = "initializing"
@@ -97,70 +177,91 @@ class StudioService:
                 except Exception as init_error:
                     raise Exception(f"Failed to create scraper: {init_error}")
 
-                try:
-                    # Run Playwright initialization in a separate thread to avoid
-                    # Python 3.13 + Windows asyncio subprocess NotImplementedError
-                    loop = asyncio.get_event_loop()
-                    success = await loop.run_in_executor(
-                        _playwright_executor,
-                        lambda: _run_async_in_thread(scraper.initialize(interactive=False))
-                    )
-                except Exception as browser_error:
-                    # Capture full error details including type
-                    error_detail = str(browser_error).strip()
-                    if not error_detail:
-                        error_detail = repr(browser_error)
-                    raise Exception(f"Failed to initialize browser: {type(browser_error).__name__}: {error_detail}")
+                # Prepare video scraper if download enabled
+                video_scraper = None
+                if not request.skip_download:
+                    video_scraper = TikTokScraper(request.output_dir, self.logger)
+                    if request.cookie_browser:
+                        video_scraper.initialize_browser(request.cookie_browser.value, required=False)
 
-                if not success:
-                    # Manual login is required - browser stays open
+                # Prepare analyzer if analysis enabled
+                analyzer = None
+                if not request.skip_analysis and request.analysis_options:
+                    config = get_config(
+                        preset=request.analysis_options.thoroughness.value,
+                        sample_percentage=request.analysis_options.sample_percent,
+                        color_clusters=request.analysis_options.color_clusters,
+                        motion_resolution=request.analysis_options.motion_res,
+                        face_model=request.analysis_options.face_model.value if request.analysis_options.face_model else None,
+                        workers=request.analysis_options.workers,
+                        enable_audio=not request.analysis_options.skip_audio,
+                        scene_detection=request.analysis_options.scene_detection,
+                        full_resolution=request.analysis_options.full_resolution,
+                    )
+                    analyzer = VideoAnalyzer(config, self.logger)
+
+                # Store for login continuation
+                self._active_sessions[session_id]["video_scraper"] = video_scraper
+                self._active_sessions[session_id]["analyzer"] = analyzer
+
+                await self.progress_manager.job_started(session_id, "studio", 0)
+
+                # Run ENTIRE session (init + scrape) in a SINGLE event loop
+                # This is critical - Playwright objects are bound to their creation loop
+                main_loop = asyncio.get_event_loop()
+                result = await main_loop.run_in_executor(
+                    _playwright_executor,
+                    lambda: _run_full_session_sync(
+                        scraper, video_scraper, analyzer,
+                        request.skip_download, request.skip_analysis
+                    )
+                )
+
+                if result.get("needs_login"):
+                    # Manual login required - browser stays open
+                    # Store the event loop for continuation
+                    self._session_loops[session_id] = result.get("loop")
                     self._active_sessions[session_id]["awaiting_login"] = True
                     await self.progress_manager.studio_login_required(session_id)
                     return
+                elif result.get("error"):
+                    raise Exception(result["error"])
+                else:
+                    results = result["results"]
+
             else:
-                # Continuing after manual login - use existing scraper
+                # Continuing after manual login - use existing scraper and loop
                 self.logger.info(f"Continuing session {session_id} after login")
+
+                scraper = self._scrapers.get(session_id)
+                session_loop = self._session_loops.get(session_id)
+
                 if not scraper:
                     raise Exception("No scraper found for session")
+                if not session_loop:
+                    raise Exception("No event loop found for session")
 
-            # Prepare video scraper if download enabled
-            video_scraper = None
-            if not request.skip_download:
-                video_scraper = TikTokScraper(request.output_dir, self.logger)
-                if request.cookie_browser:
-                    video_scraper.initialize_browser(request.cookie_browser.value, required=False)
+                video_scraper = self._active_sessions[session_id].get("video_scraper")
+                analyzer = self._active_sessions[session_id].get("analyzer")
 
-            # Prepare analyzer if analysis enabled
-            analyzer = None
-            if not request.skip_analysis and request.analysis_options:
-                config = get_config(
-                    preset=request.analysis_options.thoroughness.value,
-                    sample_percentage=request.analysis_options.sample_percent,
-                    color_clusters=request.analysis_options.color_clusters,
-                    motion_resolution=request.analysis_options.motion_res,
-                    face_model=request.analysis_options.face_model.value if request.analysis_options.face_model else None,
-                    workers=request.analysis_options.workers,
-                    enable_audio=not request.analysis_options.skip_audio,
-                    scene_detection=request.analysis_options.scene_detection,
-                    full_resolution=request.analysis_options.full_resolution,
+                # Continue in the SAME event loop
+                main_loop = asyncio.get_event_loop()
+                result = await main_loop.run_in_executor(
+                    _playwright_executor,
+                    lambda: _continue_session_after_login_sync(
+                        scraper, session_loop, video_scraper, analyzer,
+                        request.skip_download, request.skip_analysis
+                    )
                 )
-                analyzer = VideoAnalyzer(config, self.logger)
 
-            # Start scraping with progress callbacks
-            await self.progress_manager.job_started(session_id, "studio", 0)
+                if result.get("error"):
+                    raise Exception(result["error"])
 
-            # Run the scraping in a separate thread to avoid
-            # Python 3.13 + Windows asyncio subprocess NotImplementedError
-            loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(
-                _playwright_executor,
-                lambda: _run_async_in_thread(scraper.scrape_all_videos(
-                    video_scraper=video_scraper,
-                    analyzer=analyzer,
-                    skip_download=request.skip_download,
-                    skip_analysis=request.skip_analysis,
-                ))
-            )
+                results = result["results"]
+
+                # Clean up stored loop
+                if session_id in self._session_loops:
+                    del self._session_loops[session_id]
 
             # Update final status
             self._active_sessions[session_id]["status"] = "completed"
@@ -181,19 +282,13 @@ class StudioService:
             await self.progress_manager.job_failed(session_id, error_str)
 
         finally:
-            # Cleanup scraper - but NOT if awaiting login (browser needs to stay open)
+            # Cleanup - but NOT if awaiting login (browser needs to stay open)
             session = self._active_sessions.get(session_id, {})
-            if not session.get("awaiting_login") and session_id in self._scrapers:
-                try:
-                    # Run close in thread for Windows compatibility
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(
-                        _playwright_executor,
-                        lambda: _run_async_in_thread(self._scrapers[session_id].close())
-                    )
-                except:
-                    pass
-                del self._scrapers[session_id]
+            if not session.get("awaiting_login"):
+                if session_id in self._scrapers:
+                    del self._scrapers[session_id]
+                if session_id in self._session_loops:
+                    del self._session_loops[session_id]
 
     async def continue_after_login(self, session_id: str) -> bool:
         """
@@ -214,23 +309,10 @@ class StudioService:
 
         session["awaiting_login"] = False
 
-        # Re-check login and continue
-        scraper = self._scrapers.get(session_id)
-        if scraper:
-            # Re-verify login (run in thread for Windows compatibility)
-            loop = asyncio.get_event_loop()
-            is_logged_in = await loop.run_in_executor(
-                _playwright_executor,
-                lambda: _run_async_in_thread(scraper._check_logged_in())
-            )
-            if is_logged_in:
-                scraper._is_logged_in = True
-                # Continue scraping with existing browser
-                request = session["request"]
-                asyncio.create_task(self._run_studio_session(session_id, request, continue_from_login=True))
-                return True
-
-        return False
+        # Continue scraping with existing browser
+        request = session["request"]
+        asyncio.create_task(self._run_studio_session(session_id, request, continue_from_login=True))
+        return True
 
     def get_session_status(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get status of a Studio session."""
