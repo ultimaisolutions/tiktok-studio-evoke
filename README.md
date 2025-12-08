@@ -5,7 +5,7 @@ A tool for automating TikTok Studio analytics extraction, downloading videos, an
 ## Quick Start (UI)
 
 ```bash
-# Install all dependencies
+# Install all dependencies (Node.js + Python + Playwright browsers)
 npm run setup
 
 # Start the app (React + Express + FastAPI)
@@ -13,6 +13,8 @@ npm run dev
 ```
 
 Open http://localhost:5173 in your browser.
+
+> **Note**: `npm run setup` automatically installs Playwright's Chromium browser for Studio automation.
 
 ## Quick Start (CLI)
 
@@ -115,9 +117,11 @@ videos/
 
 ## Requirements
 
-- **Python** 3.8+ (MediaPipe requires < 3.13)
+- **Python** 3.8+ (fully compatible with 3.13 on Windows)
 - **Node.js** 18+ (for UI)
 - **Browsers**: Chrome, Firefox, Edge, Opera, Brave, Chromium
+
+> **Note**: MediaPipe requires Python < 3.13. On Python 3.13+, face detection falls back to Haar cascades automatically.
 
 ### Google Cloud Vision (for OCR)
 
@@ -150,6 +154,8 @@ videos/
 | MediaPipe not available | Python 3.13+ falls back to Haar cascades automatically |
 | Vision API errors | Check `GOOGLE_APPLICATION_CREDENTIALS` and API quota |
 | Studio login required | Use manual login when prompted |
+| Browser not launching | Ensure Chrome is installed; Studio mode auto-launches Chrome with remote debugging |
+| WebSocket disconnects | Check that FastAPI is running on port 8000; UI auto-reconnects with backoff |
 
 ## License
 
