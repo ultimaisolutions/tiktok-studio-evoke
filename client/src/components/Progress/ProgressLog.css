@@ -1,0 +1,78 @@
+.progress-log {
+  background: #1f2937;
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  overflow-y: auto;
+  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  font-size: 0.75rem;
+}
+
+.progress-log-empty {
+  color: #6b7280;
+  text-align: center;
+  padding: 2rem;
+}
+
+.progress-log-entry {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid #374151;
+}
+
+.progress-log-entry:last-of-type {
+  border-bottom: none;
+}
+
+.log-time {
+  color: #6b7280;
+  flex-shrink: 0;
+  width: 70px;
+}
+
+.log-event {
+  color: #9ca3af;
+  flex-shrink: 0;
+  width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-message {
+  color: #e5e7eb;
+  flex: 1;
+  word-break: break-word;
+}
+
+/* Event type colors */
+.progress-log-entry.success .log-event {
+  color: #34d399;
+}
+
+.progress-log-entry.success .log-message {
+  color: #a7f3d0;
+}
+
+.progress-log-entry.error .log-event {
+  color: #f87171;
+}
+
+.progress-log-entry.error .log-message {
+  color: #fecaca;
+}
+
+.progress-log-entry.warning .log-event {
+  color: #fbbf24;
+}
+
+.progress-log-entry.warning .log-message {
+  color: #fde68a;
+}
+
+.progress-log-entry.info .log-event {
+  color: #60a5fa;
+}
+
+.progress-log-entry.info .log-message {
+  color: #bfdbfe;
+}

@@ -1,0 +1,152 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.main-content {
+  flex: 1;
+  padding: 1.5rem;
+  overflow-y: auto;
+  background: var(--color-bg);
+}
+
+/* View container */
+.view-container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.view-header {
+  margin-bottom: 1.5rem;
+}
+
+.view-header h2 {
+  margin-bottom: 0.25rem;
+}
+
+.view-header p {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+/* Form sections */
+.form-section {
+  margin-bottom: 1.5rem;
+}
+
+.form-section-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.form-help {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-top: 0.25rem;
+}
+
+/* Checkbox and toggle styles */
+.checkbox-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checkbox-group input[type="checkbox"] {
+  width: auto;
+  cursor: pointer;
+}
+
+.checkbox-group label {
+  margin-bottom: 0;
+  cursor: pointer;
+}
+
+/* Collapsible section */
+.collapsible-section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+}
+
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.collapsible-header:hover {
+  background: var(--color-border);
+}
+
+.collapsible-content {
+  padding: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+/* Action buttons */
+.action-buttons {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.action-buttons button {
+  padding: 0.75rem 1.5rem;
+}
+
+/* Status badge */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-badge.pending {
+  background: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.status-badge.running {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+.status-badge.completed {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.status-badge.failed {
+  background: var(--color-error-light);
+  color: var(--color-error);
+}

@@ -1,0 +1,144 @@
+/* Videos view specific styles */
+.videos-layout {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: 1rem;
+  min-height: 500px;
+}
+
+@media (max-width: 900px) {
+  .videos-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.video-list-container {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.video-list {
+  overflow-y: auto;
+  max-height: 600px;
+}
+
+.video-item {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.video-item:hover {
+  background: var(--color-bg);
+}
+
+.video-item.selected {
+  background: var(--color-primary-light);
+  border-left: 3px solid var(--color-primary);
+}
+
+.video-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+}
+
+.video-id {
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 0.75rem;
+  color: var(--color-text);
+}
+
+.video-date {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.video-item-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.video-username {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.video-badges {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.video-item-summary {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+/* Video details */
+.video-details-container {
+  overflow-y: auto;
+}
+
+.video-details h3 {
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detail-section {
+  margin-bottom: 1.5rem;
+}
+
+.detail-section h4 {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 0.25rem 1rem;
+  font-size: 0.875rem;
+}
+
+.detail-list dt {
+  color: var(--color-text-muted);
+}
+
+.detail-list dd {
+  color: var(--color-text);
+  margin: 0;
+}
+
+/* Screenshots */
+.screenshot-list {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.screenshot-link {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  color: var(--color-text);
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+.screenshot-link:hover {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  text-decoration: none;
+}

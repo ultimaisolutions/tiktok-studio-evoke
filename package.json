@@ -1,0 +1,22 @@
+{
+  "name": "tiktok-studio-evoke",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TikTok Studio Scraper with React UI",
+  "scripts": {
+    "dev": "concurrently -k -n \"VITE,EXPRESS,FASTAPI\" -c \"cyan,yellow,magenta\" \"npm run dev:client\" \"npm run dev:server\" \"npm run dev:api\"",
+    "dev:client": "cd client && npm run dev",
+    "dev:server": "cd server && npm run dev",
+    "dev:api": "python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000",
+    "build": "cd client && npm run build",
+    "install:all": "npm install && cd client && npm install && cd ../server && npm install",
+    "install:python": "pip install -r requirements.txt",
+    "setup": "npm run install:all && npm run install:python"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

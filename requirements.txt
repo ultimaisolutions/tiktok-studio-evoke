@@ -23,3 +23,9 @@ ultralytics>=8.0.0
 google-cloud-vision>=3.5.0
 pillow
 # pytesseract  # Optional: kept for fallback mode when Vision API fails
+
+# Web API dependencies (for FastAPI backend)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.9
+websockets>=13.0

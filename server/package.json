@@ -1,0 +1,16 @@
+{
+  "name": "tiktok-studio-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Express proxy server for TikTok Studio UI",
+  "scripts": {
+    "dev": "node --watch index.js",
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "http-proxy-middleware": "^3.0.3"
+  }
+}

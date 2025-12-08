@@ -45,3 +45,17 @@ studio_urls_*.txt
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Node.js
+node_modules/
+package-lock.json
+client/node_modules/
+server/node_modules/
+
+# Test files
+test*.png
+test*.json
+all_results.json
+run_test.py
+=3.5.0
+nul
