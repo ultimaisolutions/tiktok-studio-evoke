@@ -10,12 +10,18 @@ function VideosView() {
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [outputDir, setOutputDir] = useState('videos');
   const [totalCount, setTotalCount] = useState(0);
+  const [sortBy, setSortBy] = useState('publish_date');
+  const [sortOrder, setSortOrder] = useState('desc');
 
   const loadVideos = async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.getVideos({ output_dir: outputDir });
+      const response = await api.getVideos({
+        output_dir: outputDir,
+        sort_by: sortBy,
+        sort_order: sortOrder
+      });
       // Handle both new format { videos: [], total: int } and legacy array format
       const videoList = response.videos || response;
       setVideos(videoList);
@@ -29,7 +35,7 @@ function VideosView() {
 
   useEffect(() => {
     loadVideos();
-  }, [outputDir]);
+  }, [outputDir, sortBy, sortOrder]);
 
   const loadVideoDetails = async (videoId) => {
     try {
@@ -67,6 +73,17 @@ function VideosView() {
             <strong>{totalCount}</strong> videos found
           </div>
         )}
+        <div className="sort-controls">
+          <label>Sort by:</label>
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+            <option value="publish_date">Publish Date</option>
+            <option value="download_date">Download Date</option>
+          </select>
+          <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)}>
+            <option value="desc">Newest First</option>
+            <option value="asc">Oldest First</option>
+          </select>
+        </div>
       </div>
 
       {error && <div className="error-message mb-4">{error}</div>}

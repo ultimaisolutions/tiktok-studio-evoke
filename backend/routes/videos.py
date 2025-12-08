@@ -1,6 +1,7 @@
 """Videos API routes for listing and viewing downloaded videos."""
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
@@ -26,7 +27,9 @@ async def list_videos(
     output_dir: str = Query(DEFAULT_OUTPUT_DIR, description="Output directory to scan"),
     username: Optional[str] = Query(None, description="Filter by username"),
     limit: int = Query(10000, ge=1, le=10000, description="Maximum videos to return"),
-    offset: int = Query(0, ge=0, description="Offset for pagination")
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    sort_by: str = Query("publish_date", description="Sort by: publish_date, download_date"),
+    sort_order: str = Query("desc", description="Sort order: asc, desc")
 ):
     """
     List all downloaded videos with their metadata.
@@ -74,10 +77,16 @@ async def list_videos(
             if screenshot_path.exists():
                 screenshots.append(str(screenshot_path.relative_to(output_path)))
 
+        # Get download date from file modification time
+        download_timestamp = mp4_file.stat().st_mtime
+        download_date = datetime.fromtimestamp(download_timestamp).strftime("%Y-%m-%d %H:%M")
+
         videos.append({
             "video_id": video_id,
             "username": video_username,
             "date": video_date,
+            "download_date": download_date,
+            "download_timestamp": download_timestamp,
             "path": str(mp4_file.relative_to(output_path)),
             "absolute_path": str(mp4_file),
             "metadata_path": str(json_file.relative_to(output_path)) if json_file.exists() else None,
@@ -88,8 +97,13 @@ async def list_videos(
             "analysis_summary": _summarize_analysis(analysis) if analysis else None
         })
 
-    # Sort by date (newest first)
-    videos.sort(key=lambda v: v.get("date", ""), reverse=True)
+    # Sort based on parameters
+    if sort_by == "download_date":
+        sort_key = lambda v: v.get("download_timestamp", 0)
+    else:  # publish_date (default)
+        sort_key = lambda v: v.get("date", "") or ""
+
+    videos.sort(key=sort_key, reverse=(sort_order == "desc"))
 
     # Apply pagination and return with total count
     return {"videos": videos[offset:offset + limit], "total": len(videos)}
