@@ -18,6 +18,14 @@ from typing import Optional
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 
 from utils import ensure_directory, timestamp_to_date
+from datetime import datetime
+
+
+def normalize_username(username: str) -> str:
+    """Normalize username: remove @, lowercase, remove dots."""
+    if not username:
+        return "unknown_user"
+    return username.lstrip("@").lower().replace(".", "")
 
 
 # TikTok Studio URLs
@@ -1231,7 +1239,20 @@ class TikTokStudioScraper:
             username = metadata.get("username")
             if not username or username == "unknown_user":
                 username = self.account_username or "unknown_user"
+            # Normalize username for consistent folder naming
+            username = normalize_username(username)
+
             create_date = metadata.get("create_date", timestamp_to_date(None))
+            # Validate date - use today if invalid (e.g., 7592-00-00)
+            try:
+                datetime.strptime(create_date, "%Y-%m-%d")
+                # Also check for clearly invalid dates
+                year = int(create_date.split("-")[0])
+                if year < 2016 or year > 2030:  # TikTok didn't exist before 2016
+                    raise ValueError("Invalid year")
+            except (ValueError, IndexError):
+                create_date = datetime.now().strftime("%Y-%m-%d")
+
             output_folder = self.output_dir / username / create_date
             ensure_directory(output_folder)
 
