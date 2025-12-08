@@ -136,7 +136,7 @@ class TikTokStudioScraper:
 
         # Navigate to TikTok Studio
         self.logger.info("Navigating to TikTok Studio...")
-        await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=60000)
+        await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
 
         # Check if we're logged in
         self._is_logged_in = await self._check_logged_in()
@@ -163,7 +163,7 @@ class TikTokStudioScraper:
             await asyncio.get_event_loop().run_in_executor(None, input)
 
             # Re-check login status
-            await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=60000)
+            await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
             self._is_logged_in = await self._check_logged_in()
 
             if not self._is_logged_in:
@@ -295,7 +295,7 @@ class TikTokStudioScraper:
             import requests
 
             endpoint = f"http://localhost:{port}/json/version"
-            response = requests.get(endpoint, timeout=2)
+            response = requests.get(endpoint, timeout=0.5)
             return response.status_code == 200
 
         except Exception:
@@ -384,7 +384,7 @@ class TikTokStudioScraper:
 
             # Use existing login check logic
             # Wait a moment for page to settle
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(500)
 
             current_url = page.url
 
@@ -395,7 +395,7 @@ class TikTokStudioScraper:
             # If on Studio page, check for logged-in indicators
             if "tiktokstudio" in current_url:
                 try:
-                    await page.wait_for_selector('[class*="sidebar"]', timeout=5000)
+                    await page.wait_for_selector('[class*="sidebar"]', timeout=2000)
                     return True
                 except:
                     pass
@@ -657,8 +657,8 @@ class TikTokStudioScraper:
 
             # Wait for Chrome to start and enable debugging endpoint
             self.logger.info("Waiting for Chrome to start...")
-            for i in range(10):  # Wait up to 10 seconds
-                await asyncio.sleep(1)
+            for i in range(10):  # Wait up to 3 seconds
+                await asyncio.sleep(0.3)
                 if await self._verify_cdp_endpoint(port):
                     self.logger.info(f"Chrome is ready on port {port}")
                     return True
@@ -679,7 +679,7 @@ class TikTokStudioScraper:
         """
         try:
             # Wait a moment for page to settle
-            await self.page.wait_for_timeout(2000)
+            await self.page.wait_for_timeout(500)
 
             current_url = self.page.url
 
@@ -692,7 +692,7 @@ class TikTokStudioScraper:
                 # Try to find content that indicates logged in state
                 # Look for the sidebar with videos or creator name
                 try:
-                    await self.page.wait_for_selector('[class*="sidebar"]', timeout=5000)
+                    await self.page.wait_for_selector('[class*="sidebar"]', timeout=2000)
                     return True
                 except:
                     pass
@@ -753,7 +753,7 @@ class TikTokStudioScraper:
             else:
                 # Launched new browser - navigate to Studio home (NOT /content)
                 # Studio home will show analytics page with sidebar
-                await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=60000)
+                await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
                 await self.page.wait_for_timeout(3000)
 
             # Process videos in batches as they are discovered
@@ -881,7 +881,7 @@ class TikTokStudioScraper:
 
             # Wait for sidebar to load
             try:
-                await self.page.wait_for_selector('[class*="sidebar"]', timeout=5000)
+                await self.page.wait_for_selector('[class*="sidebar"]', timeout=2000)
                 self.logger.info("Sidebar detected")
             except:
                 self.logger.warning("Sidebar selector not found, continuing anyway")
