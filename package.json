@@ -11,7 +11,8 @@
     "build": "cd client && npm run build",
     "install:all": "npm install && cd client && npm install && cd ../server && npm install",
     "install:python": "pip install -r requirements.txt",
-    "setup": "npm run install:all && npm run install:python"
+    "install:playwright": "playwright install chromium",
+    "setup": "npm run install:all && npm run install:python && npm run install:playwright"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

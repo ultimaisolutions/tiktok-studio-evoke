@@ -4,6 +4,7 @@ FastAPI application entry point for TikTok Studio Scraper API.
 Run with: uvicorn backend.main:app --reload --port 8000
 """
 
+import asyncio
 import logging
 import sys
 from pathlib import Path

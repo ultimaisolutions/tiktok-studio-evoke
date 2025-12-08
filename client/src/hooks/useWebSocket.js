@@ -12,6 +12,9 @@ export function useWebSocket(jobId) {
   const [logs, setLogs] = useState([]);
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const isTerminalStateRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+  const MAX_RECONNECT_ATTEMPTS = 10;
 
   const connect = useCallback(() => {
     if (!jobId) return;
@@ -41,7 +44,17 @@ export function useWebSocket(jobId) {
         // Update progress state
         if (message.data) {
           setProgress(message.data);
+
+          // Check for terminal states - stop reconnecting if job is done
+          const status = message.data.status;
+          if (status === 'failed' || status === 'completed' || status === 'cancelled') {
+            console.log(`Job reached terminal state: ${status}`);
+            isTerminalStateRef.current = true;
+          }
         }
+
+        // Reset reconnect attempts on successful message
+        reconnectAttemptRef.current = 0;
 
         // Add to logs
         setLogs((prev) => [
@@ -61,13 +74,33 @@ export function useWebSocket(jobId) {
       setIsConnected(false);
       console.log('WebSocket disconnected:', event.code, event.reason);
 
-      // Auto-reconnect after 3 seconds if not intentionally closed
-      if (event.code !== 1000) {
-        reconnectTimeoutRef.current = setTimeout(() => {
-          console.log('Attempting to reconnect...');
-          connect();
-        }, 3000);
+      // Don't reconnect if:
+      // 1. Normal close (1000)
+      // 2. Job reached terminal state (failed/completed/cancelled)
+      // 3. Max reconnection attempts exceeded
+      if (event.code === 1000) {
+        console.log('Normal WebSocket close, not reconnecting');
+        return;
       }
+
+      if (isTerminalStateRef.current) {
+        console.log('Job in terminal state, not reconnecting');
+        return;
+      }
+
+      if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        console.log(`Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) exceeded`);
+        return;
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+      const backoffMs = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 30000);
+      reconnectAttemptRef.current += 1;
+
+      console.log(`Reconnecting in ${backoffMs}ms (attempt ${reconnectAttemptRef.current}/${MAX_RECONNECT_ATTEMPTS})...`);
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connect();
+      }, backoffMs);
     };
 
     ws.onerror = (error) => {
@@ -90,6 +123,8 @@ export function useWebSocket(jobId) {
   const clearLogs = useCallback(() => {
     setLogs([]);
     setProgress(null);
+    isTerminalStateRef.current = false;
+    reconnectAttemptRef.current = 0;
   }, []);
 
   useEffect(() => {

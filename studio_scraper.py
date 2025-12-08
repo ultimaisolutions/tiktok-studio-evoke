@@ -10,6 +10,8 @@ import json
 import os
 import platform
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -70,14 +72,18 @@ class TikTokStudioScraper:
         self._processed_videos = set()
         self._connected_to_existing = False
 
-    async def initialize(self) -> bool:
+    async def initialize(self, interactive: bool = True) -> bool:
         """
         Initialize browser and attempt authentication.
 
         Flow: Try cookies → Connect to existing browser → Manual login in new browser
 
+        Args:
+            interactive: If True (CLI mode), wait for user input for manual login.
+                        If False (web service mode), return False when login required.
+
         Returns:
-            True if successfully logged in, False otherwise
+            True if successfully logged in, False if login required (web mode) or failed
         """
         self.logger.info("Initializing TikTok Studio scraper...")
 
@@ -101,7 +107,21 @@ class TikTokStudioScraper:
             browser_launcher = self.playwright.chromium
 
         # Launch browser in headful mode so user can see/interact
-        self.browser = await browser_launcher.launch(headless=False)
+        try:
+            self.browser = await browser_launcher.launch(headless=False)
+        except Exception as e:
+            error_msg = str(e)
+            # Check for common Playwright errors
+            if "Executable doesn't exist" in error_msg or "browserType.launch" in error_msg:
+                raise Exception(
+                    f"Playwright {self.browser_type} browser not installed. "
+                    f"Run 'playwright install {self.browser_type}' to install it. "
+                    f"Original error: {error_msg}"
+                )
+            elif "Target page, context or browser has been closed" in error_msg:
+                raise Exception(f"Browser was closed unexpectedly: {error_msg}")
+            else:
+                raise Exception(f"Failed to launch {self.browser_type} browser: {error_msg}")
 
         # Create context with viewport
         self.context = await self.browser.new_context(
@@ -122,8 +142,16 @@ class TikTokStudioScraper:
         self._is_logged_in = await self._check_logged_in()
 
         if not self._is_logged_in:
-            # Step 3: Manual login
-            self.logger.info("Not logged in. Please log in manually in the browser window.")
+            # Step 3: Manual login required
+            self.logger.info("Not logged in. Manual login required.")
+
+            if not interactive:
+                # Web service mode: return False to signal login needed
+                # Caller should handle showing login UI and calling continue_after_login
+                self.logger.info("Non-interactive mode: returning False for manual login flow")
+                return False
+
+            # CLI mode: wait for user input
             print("\n" + "=" * 50)
             print("  MANUAL LOGIN REQUIRED")
             print("=" * 50)
@@ -440,8 +468,24 @@ class TikTokStudioScraper:
 
             if not endpoint:
                 self.logger.info("No browser with remote debugging found")
-                self._show_cdp_instructions()
-                return False
+
+                # If CDP port is specified, try to auto-launch Chrome
+                if self.cdp_port:
+                    self.logger.info(f"Attempting to auto-launch Chrome on port {self.cdp_port}...")
+                    if await self._launch_chrome_with_debugging(self.cdp_port):
+                        # Retry finding endpoint after launching
+                        endpoint = await self._find_cdp_endpoint()
+                        if not endpoint:
+                            self.logger.warning("Chrome launched but could not connect")
+                            self._show_cdp_instructions()
+                            return False
+                    else:
+                        self.logger.warning("Failed to auto-launch Chrome")
+                        self._show_cdp_instructions()
+                        return False
+                else:
+                    self._show_cdp_instructions()
+                    return False
 
             # Connect to browser
             self.logger.info(f"Connecting to browser at {endpoint}...")
@@ -537,6 +581,94 @@ class TikTokStudioScraper:
         print()
         print("  Then navigate to TikTok Studio and log in before running this script.")
         print("=" * 70 + "\n")
+
+    async def _launch_chrome_with_debugging(self, port: int) -> bool:
+        """
+        Auto-launch Chrome with remote debugging enabled.
+
+        Args:
+            port: The debugging port to use
+
+        Returns:
+            True if Chrome was successfully launched
+        """
+        self.logger.info(f"Attempting to launch Chrome with remote debugging on port {port}...")
+
+        # Find Chrome executable based on platform
+        chrome_path = None
+        system = platform.system()
+
+        if system == "Windows":
+            # Check common Windows paths
+            possible_paths = [
+                os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    chrome_path = path
+                    break
+        elif system == "Darwin":  # macOS
+            mac_paths = [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            ]
+            for path in mac_paths:
+                if os.path.exists(path):
+                    chrome_path = path
+                    break
+        else:  # Linux
+            chrome_path = shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("chromium")
+
+        if not chrome_path:
+            self.logger.warning("Chrome executable not found. Please install Google Chrome.")
+            return False
+
+        self.logger.info(f"Found Chrome at: {chrome_path}")
+
+        # Create temp profile directory
+        if system == "Windows":
+            profile_dir = os.path.expandvars(r"%TEMP%\tiktok_studio_chrome_profile")
+        else:
+            profile_dir = "/tmp/tiktok_studio_chrome_profile"
+
+        # Launch Chrome with debugging
+        try:
+            cmd = [
+                chrome_path,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                STUDIO_HOME_URL
+            ]
+
+            self.logger.info(f"Launching Chrome: {' '.join(cmd)}")
+
+            # Use Popen to launch without blocking
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True if system != "Windows" else False,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if system == "Windows" else 0
+            )
+
+            # Wait for Chrome to start and enable debugging endpoint
+            self.logger.info("Waiting for Chrome to start...")
+            for i in range(10):  # Wait up to 10 seconds
+                await asyncio.sleep(1)
+                if await self._verify_cdp_endpoint(port):
+                    self.logger.info(f"Chrome is ready on port {port}")
+                    return True
+
+            self.logger.warning("Chrome started but debugging endpoint not available")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to launch Chrome: {e}")
+            return False
 
     async def _check_logged_in(self) -> bool:
         """

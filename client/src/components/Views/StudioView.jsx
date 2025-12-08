@@ -219,6 +219,13 @@ function StudioView() {
           {/* Error Display */}
           {error && <div className="error-message">{error}</div>}
 
+          {/* Job Failure Display */}
+          {isFailed && progress?.error && (
+            <div className="error-message job-error">
+              <strong>Job Failed:</strong> {progress.error}
+            </div>
+          )}
+
           {/* Login Required Modal */}
           {awaitingLogin && (
             <div className="login-prompt">
@@ -241,7 +248,7 @@ function StudioView() {
           <div className="action-buttons">
             {!sessionId ? (
               <button type="submit" className="btn-primary" disabled={loading}>
-                {loading ? 'Starting...' : 'Start Studio Scraping'}
+                {loading ? 'Starting...' : 'New Session'}
               </button>
             ) : (
               <>
@@ -254,7 +261,16 @@ function StudioView() {
                     Stop Session
                   </button>
                 )}
-                {(isCompleted || isFailed) && (
+                {isFailed && (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={handleReset}
+                  >
+                    Retry
+                  </button>
+                )}
+                {isCompleted && (
                   <button
                     type="button"
                     className="btn-secondary"

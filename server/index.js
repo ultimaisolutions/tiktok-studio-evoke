@@ -38,6 +38,9 @@ app.use('/api', createProxyMiddleware({
   changeOrigin: true,
   // Express strips /api when mounting, so we need to add it back
   pathRewrite: (path) => `/api${path}`,
+  // Timeout settings to prevent 504 errors
+  timeout: 300000,       // 5 minutes for long-running operations
+  proxyTimeout: 300000,  // 5 minutes proxy timeout
   onProxyReq: (proxyReq, req, res) => {
     // Log proxied requests
     console.log(`  → Proxying to ${API_TARGET}/api${req.url}`);
@@ -64,6 +67,9 @@ const wsProxy = createProxyMiddleware({
   ws: true,
   // Express strips /ws when mounting, so we need to add it back
   pathRewrite: (path) => `/ws${path}`,
+  // Longer timeout for WebSocket connections
+  timeout: 600000,       // 10 minutes
+  proxyTimeout: 600000,  // 10 minutes
   onError: (err, req, res) => {
     console.error('WebSocket proxy error:', err.message);
   },
@@ -104,6 +110,10 @@ const server = app.listen(PORT, () => {
   console.log('═══════════════════════════════════════════════════════════');
   console.log('');
 });
+
+// Server-level timeout settings
+server.setTimeout(300000);       // 5 minute server timeout
+server.keepAliveTimeout = 65000; // Keep-alive timeout (slightly higher than typical LB timeout)
 
 // Subscribe WebSocket proxy to server upgrade events
 // This is required for http-proxy-middleware v3.x to handle WebSocket connections
