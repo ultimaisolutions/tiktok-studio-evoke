@@ -295,7 +295,7 @@ class TikTokStudioScraper:
             import requests
 
             endpoint = f"http://localhost:{port}/json/version"
-            response = requests.get(endpoint, timeout=0.5)
+            response = requests.get(endpoint, timeout=1)
             return response.status_code == 200
 
         except Exception:
@@ -657,8 +657,8 @@ class TikTokStudioScraper:
 
             # Wait for Chrome to start and enable debugging endpoint
             self.logger.info("Waiting for Chrome to start...")
-            for i in range(10):  # Wait up to 3 seconds
-                await asyncio.sleep(0.3)
+            for i in range(10):  # Wait up to 5 seconds
+                await asyncio.sleep(0.5)
                 if await self._verify_cdp_endpoint(port):
                     self.logger.info(f"Chrome is ready on port {port}")
                     return True
