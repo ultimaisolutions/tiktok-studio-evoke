@@ -1,4 +1,19 @@
 /* Videos view specific styles */
+
+/* Video count display */
+.video-count-display {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-success-light, #d4edda);
+  border-radius: var(--radius, 4px);
+  font-size: 0.9rem;
+  color: var(--color-success, #155724);
+}
+
+.video-count-display strong {
+  font-size: 1.1rem;
+}
+
 .videos-layout {
   display: grid;
   grid-template-columns: 400px 1fr;
@@ -20,7 +35,7 @@
 
 .video-list {
   overflow-y: auto;
-  max-height: 600px;
+  max-height: calc(100vh - 300px);
 }
 
 .video-item {

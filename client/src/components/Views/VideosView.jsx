@@ -9,13 +9,17 @@ function VideosView() {
   const [error, setError] = useState(null);
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [outputDir, setOutputDir] = useState('videos');
+  const [totalCount, setTotalCount] = useState(0);
 
   const loadVideos = async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getVideos({ output_dir: outputDir });
-      setVideos(data);
+      const response = await api.getVideos({ output_dir: outputDir });
+      // Handle both new format { videos: [], total: int } and legacy array format
+      const videoList = response.videos || response;
+      setVideos(videoList);
+      setTotalCount(response.total ?? videoList.length);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -58,6 +62,11 @@ function VideosView() {
             Refresh
           </button>
         </div>
+        {!loading && (
+          <div className="video-count-display">
+            <strong>{totalCount}</strong> videos found
+          </div>
+        )}
       </div>
 
       {error && <div className="error-message mb-4">{error}</div>}

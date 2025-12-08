@@ -14,11 +14,18 @@ router = APIRouter(prefix="/videos", tags=["videos"])
 DEFAULT_OUTPUT_DIR = "videos"
 
 
-@router.get("", response_model=List[dict])
+def normalize_username(username: str) -> str:
+    """Normalize username: remove @, lowercase, remove dots."""
+    if not username:
+        return "unknown"
+    return username.lstrip("@").lower().replace(".", "")
+
+
+@router.get("")
 async def list_videos(
     output_dir: str = Query(DEFAULT_OUTPUT_DIR, description="Output directory to scan"),
     username: Optional[str] = Query(None, description="Filter by username"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum videos to return"),
+    limit: int = Query(10000, ge=1, le=10000, description="Maximum videos to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
     """
@@ -40,7 +47,7 @@ async def list_videos(
         # Extract info from path structure: videos/{username}/{date}/{video_id}.mp4
         parts = mp4_file.relative_to(output_path).parts
 
-        video_username = parts[0] if len(parts) > 2 else "unknown"
+        video_username = normalize_username(parts[0]) if len(parts) > 2 else "unknown"
         video_date = parts[1] if len(parts) > 2 else None
         video_id = mp4_file.stem
 
@@ -84,8 +91,8 @@ async def list_videos(
     # Sort by date (newest first)
     videos.sort(key=lambda v: v.get("date", ""), reverse=True)
 
-    # Apply pagination
-    return videos[offset:offset + limit]
+    # Apply pagination and return with total count
+    return {"videos": videos[offset:offset + limit], "total": len(videos)}
 
 
 @router.get("/{video_id}", response_model=dict)
