@@ -22,8 +22,8 @@ app.use(cors({
   credentials: true,
 }));
 
-// JSON body parsing
-app.use(express.json());
+// Note: Do NOT use express.json() here - it consumes the request body stream
+// before http-proxy-middleware can forward it to FastAPI
 
 // Logging middleware
 app.use((req, res, next) => {
@@ -36,12 +36,11 @@ app.use((req, res, next) => {
 app.use('/api', createProxyMiddleware({
   target: API_TARGET,
   changeOrigin: true,
-  pathRewrite: {
-    '^/api': '/api',
-  },
+  // Express strips /api when mounting, so we need to add it back
+  pathRewrite: (path) => `/api${path}`,
   onProxyReq: (proxyReq, req, res) => {
     // Log proxied requests
-    console.log(`  → Proxying to ${API_TARGET}${req.url}`);
+    console.log(`  → Proxying to ${API_TARGET}/api${req.url}`);
   },
   onProxyRes: (proxyRes, req, res) => {
     console.log(`  ← Response: ${proxyRes.statusCode}`);
@@ -58,15 +57,18 @@ app.use('/api', createProxyMiddleware({
   },
 }));
 
-// Proxy WebSocket connections
-app.use('/ws', createProxyMiddleware({
+// WebSocket proxy - store reference to subscribe to upgrade events later
+const wsProxy = createProxyMiddleware({
   target: API_TARGET.replace('http', 'ws'),
   changeOrigin: true,
   ws: true,
+  // Express strips /ws when mounting, so we need to add it back
+  pathRewrite: (path) => `/ws${path}`,
   onError: (err, req, res) => {
     console.error('WebSocket proxy error:', err.message);
   },
-}));
+});
+app.use('/ws', wsProxy);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -103,9 +105,11 @@ const server = app.listen(PORT, () => {
   console.log('');
 });
 
-// Handle WebSocket upgrade for proxying
+// Subscribe WebSocket proxy to server upgrade events
+// This is required for http-proxy-middleware v3.x to handle WebSocket connections
 server.on('upgrade', (req, socket, head) => {
-  console.log(`WebSocket upgrade request: ${req.url}`);
+  console.log(`[WS] Upgrade request: ${req.url}`);
+  wsProxy.upgrade(req, socket, head);
 });
 
 // Graceful shutdown

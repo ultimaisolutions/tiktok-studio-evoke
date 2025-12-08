@@ -1,11 +1,14 @@
 """Scraper API routes for downloading TikTok videos."""
 
+import logging
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from typing import List, Optional
 
 from backend.models.schemas import DownloadRequest, JobStatus, BrowserType
 from backend.services.scraper_service import ScraperService
 from backend.utils.progress_manager import progress_manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/scraper", tags=["scraper"])
 
@@ -16,9 +19,21 @@ _scraper_service: Optional[ScraperService] = None
 def get_scraper_service() -> ScraperService:
     """Dependency to get scraper service instance."""
     global _scraper_service
+    logger.info("=== GET_SCRAPER_SERVICE CALLED ===")
     if _scraper_service is None:
+        logger.info("Creating new ScraperService instance...")
         _scraper_service = ScraperService(progress_manager)
+        logger.info("ScraperService instance created")
+    else:
+        logger.info("Returning existing ScraperService instance")
     return _scraper_service
+
+
+@router.get("/test")
+async def test_endpoint():
+    """Test endpoint to verify route is accessible."""
+    logger.info("=== TEST ENDPOINT HIT ===")
+    return {"status": "ok", "message": "scraper route works"}
 
 
 @router.post("/download", response_model=dict)
@@ -31,8 +46,18 @@ async def start_download(
 
     Returns job_id for tracking progress via WebSocket.
     """
+    logger.info("=== DOWNLOAD ENDPOINT HIT ===")
+    logger.info(f"Request URLs: {request.urls}")
+    logger.info(f"Request options: output_dir={request.output_dir}, browser={request.browser}, no_browser={request.no_browser}")
+
+    logger.info("Calling service.start_download...")
     job_id = await service.start_download(request)
-    return {"job_id": job_id, "status": "started", "total_urls": len(request.urls)}
+
+    logger.info(f"Got job_id: {job_id}")
+    response = {"job_id": job_id, "status": "started", "total_urls": len(request.urls)}
+    logger.info(f"Returning response: {response}")
+
+    return response
 
 
 @router.post("/download-file", response_model=dict)

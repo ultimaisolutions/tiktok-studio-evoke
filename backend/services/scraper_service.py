@@ -10,9 +10,12 @@ from concurrent.futures import ThreadPoolExecutor
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from scraper import TikTokScraper
 from backend.utils.progress_manager import ProgressManager
 from backend.models.schemas import DownloadRequest, BrowserType
+
+# Note: TikTokScraper is imported lazily inside _run_download to avoid
+# blocking the event loop during service initialization (pyktok does
+# blocking network calls on import)
 
 
 class ScraperService:
@@ -34,19 +37,43 @@ class ScraperService:
         Returns:
             Job ID for tracking progress
         """
+        self.logger.info("=== START_DOWNLOAD CALLED ===")
+
+        self.logger.info("Creating job via progress_manager...")
         job_id = self.progress_manager.create_job("download")
+        self.logger.info(f"Job created: {job_id}")
+
         self._active_jobs[job_id] = {"status": "pending", "request": request}
+        self.logger.info("Job added to active_jobs")
 
         # Start download in background
+        self.logger.info("Creating background task...")
         asyncio.create_task(self._run_download(job_id, request))
+        self.logger.info("Background task created")
 
+        self.logger.info(f"Returning job_id: {job_id}")
         return job_id
 
     async def _run_download(self, job_id: str, request: DownloadRequest) -> None:
         """Run download job in background with progress updates."""
+        self.logger.info(f"=== _RUN_DOWNLOAD STARTED for {job_id} ===")
         try:
+            # Yield control to event loop - allows HTTP response to be sent
+            # before the blocking import happens
+            self.logger.info("About to yield with sleep(0)...")
+            await asyncio.sleep(0)
+            self.logger.info("Yielded control, HTTP response should be sent now")
+
+            # Import here to avoid blocking event loop during service init
+            # (pyktok does blocking network/browser calls on import)
+            self.logger.info("Importing TikTokScraper (may take a while)...")
+            from scraper import TikTokScraper
+            self.logger.info("TikTokScraper imported successfully")
+
             # Create scraper instance
+            self.logger.info("Creating TikTokScraper instance...")
             scraper = TikTokScraper(request.output_dir, self.logger)
+            self.logger.info("TikTokScraper instance created")
 
             # Initialize browser if needed
             if not request.no_browser:
