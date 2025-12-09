@@ -183,3 +183,15 @@
   color: var(--color-primary);
   text-decoration: none;
 }
+
+/* Open in Explorer link */
+.open-explorer-link {
+  color: var(--color-primary, #007bff);
+  font-size: 0.85em;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.open-explorer-link:hover {
+  text-decoration: underline;
+}

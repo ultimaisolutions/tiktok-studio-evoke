@@ -46,6 +46,16 @@ function VideosView() {
     }
   };
 
+  const openInExplorer = async (videoId, e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      await api.openInExplorer(videoId, outputDir);
+    } catch (err) {
+      setError('Failed to open file location');
+    }
+  };
+
   return (
     <div className="view-container">
       <div className="view-header">
@@ -130,6 +140,13 @@ function VideosView() {
                       {video.analysis_summary.has_face && <span>Face</span>}
                     </div>
                   )}
+                  <a
+                    href="#"
+                    className="open-explorer-link"
+                    onClick={(e) => openInExplorer(video.video_id, e)}
+                  >
+                    Open in Explorer
+                  </a>
                 </div>
               ))}
             </div>
@@ -152,7 +169,17 @@ function VideosView() {
                   <dt>Date</dt>
                   <dd>{selectedVideo.date}</dd>
                   <dt>Path</dt>
-                  <dd className="text-sm">{selectedVideo.path}</dd>
+                  <dd className="text-sm">
+                    {selectedVideo.path}
+                    <a
+                      href="#"
+                      className="open-explorer-link"
+                      onClick={(e) => openInExplorer(selectedVideo.video_id, e)}
+                      style={{ marginLeft: '8px' }}
+                    >
+                      Open in Explorer
+                    </a>
+                  </dd>
                 </dl>
               </div>
 

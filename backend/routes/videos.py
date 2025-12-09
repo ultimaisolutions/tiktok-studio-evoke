@@ -1,6 +1,7 @@
 """Videos API routes for listing and viewing downloaded videos."""
 
 import json
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -208,6 +209,29 @@ async def get_screenshot(
         break
 
     raise HTTPException(status_code=404, detail=f"Screenshot not found")
+
+
+@router.post("/{video_id}/open-in-explorer")
+async def open_in_explorer(
+    video_id: str,
+    output_dir: str = Query(DEFAULT_OUTPUT_DIR)
+):
+    """Open File Explorer and select the video file."""
+    output_path = Path(output_dir)
+
+    # Search for video file
+    video_file = None
+    for mp4_file in output_path.rglob(f"{video_id}.mp4"):
+        video_file = mp4_file
+        break
+
+    if not video_file:
+        raise HTTPException(status_code=404, detail=f"Video {video_id} not found")
+
+    # Open File Explorer and select the file (Windows)
+    subprocess.run(['explorer', '/select,', str(video_file.resolve())])
+
+    return {"success": True, "path": str(video_file.resolve())}
 
 
 def _summarize_analysis(analysis: dict) -> dict:

@@ -112,6 +112,10 @@ export const api = {
   },
   getVideo: (videoId, outputDir = 'videos') =>
     apiFetch(`/videos/${videoId}?output_dir=${encodeURIComponent(outputDir)}`),
+  openInExplorer: (videoId, outputDir = 'videos') =>
+    apiFetch(`/videos/${videoId}/open-in-explorer?output_dir=${encodeURIComponent(outputDir)}`, {
+      method: 'POST',
+    }),
 };
 
 export default useApi;
