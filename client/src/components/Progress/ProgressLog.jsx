@@ -34,7 +34,7 @@ function ProgressLog({ logs = [], maxHeight = 300 }) {
       case 'download_complete':
         return data.success ? `Downloaded: ${data.path || data.url}` : `Failed: ${data.message || 'Unknown error'}`;
       case 'analysis_start':
-        return `Analyzing: ${data.video_path?.split('/').pop()}`;
+        return `Analyzing: ${data.index}/${data.total} - ${data.video_path?.split('/').pop()}`;
       case 'analysis_complete':
         return data.success ? `Analysis complete (${data.metrics?.processing_time_ms}ms)` : 'Analysis failed';
       case 'job_progress':

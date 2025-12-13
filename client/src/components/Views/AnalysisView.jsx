@@ -17,6 +17,7 @@ function AnalysisView() {
   const [fullResolution, setFullResolution] = useState(false);
   const [enableCloudAudio, setEnableCloudAudio] = useState(true);
   const [cloudAudioLanguage, setCloudAudioLanguage] = useState('en-US');
+  const [removeMusic, setRemoveMusic] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Job state
@@ -49,6 +50,7 @@ function AnalysisView() {
           full_resolution: fullResolution,
           enable_cloud_audio: enableCloudAudio,
           cloud_audio_language: cloudAudioLanguage,
+          remove_music: removeMusic,
         },
       };
 
@@ -248,27 +250,41 @@ function AnalysisView() {
                 </div>
 
                 {enableCloudAudio && !skipAudio && (
-                  <div className="form-group mt-2" style={{ marginLeft: '24px' }}>
-                    <label htmlFor="cloudAudioLanguage">Transcription Language</label>
-                    <select
-                      id="cloudAudioLanguage"
-                      value={cloudAudioLanguage}
-                      onChange={(e) => setCloudAudioLanguage(e.target.value)}
-                      disabled={isRunning}
-                      style={{ width: '200px' }}
-                    >
-                      <option value="en-US">English (US)</option>
-                      <option value="en-GB">English (UK)</option>
-                      <option value="he-IL">Hebrew</option>
-                      <option value="es-ES">Spanish</option>
-                      <option value="fr-FR">French</option>
-                      <option value="de-DE">German</option>
-                      <option value="pt-BR">Portuguese (Brazil)</option>
-                      <option value="ja-JP">Japanese</option>
-                      <option value="ko-KR">Korean</option>
-                      <option value="zh-CN">Chinese (Simplified)</option>
-                    </select>
-                  </div>
+                  <>
+                    <div className="form-group mt-2" style={{ marginLeft: '24px' }}>
+                      <label htmlFor="cloudAudioLanguage">Transcription Language</label>
+                      <select
+                        id="cloudAudioLanguage"
+                        value={cloudAudioLanguage}
+                        onChange={(e) => setCloudAudioLanguage(e.target.value)}
+                        disabled={isRunning}
+                        style={{ width: '200px' }}
+                      >
+                        <option value="en-US">English (US)</option>
+                        <option value="en-GB">English (UK)</option>
+                        <option value="he-IL">Hebrew</option>
+                        <option value="es-ES">Spanish</option>
+                        <option value="fr-FR">French</option>
+                        <option value="de-DE">German</option>
+                        <option value="pt-BR">Portuguese (Brazil)</option>
+                        <option value="ja-JP">Japanese</option>
+                        <option value="ko-KR">Korean</option>
+                        <option value="zh-CN">Chinese (Simplified)</option>
+                      </select>
+                    </div>
+                    <div className="checkbox-group mt-2" style={{ marginLeft: '24px' }}>
+                      <input
+                        type="checkbox"
+                        id="removeMusic"
+                        checked={removeMusic}
+                        onChange={(e) => setRemoveMusic(e.target.checked)}
+                        disabled={isRunning}
+                      />
+                      <label htmlFor="removeMusic">
+                        Remove background music before transcription (uses demucs ML model)
+                      </label>
+                    </div>
+                  </>
                 )}
               </div>
             )}

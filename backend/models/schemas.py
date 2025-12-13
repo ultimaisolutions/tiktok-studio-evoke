@@ -62,7 +62,7 @@ class AnalysisOptions(BaseModel):
     enable_cloud_audio: bool = Field(True, description="Enable cloud speech transcription")
     cloud_audio_language: str = Field("en-US", description="Language code for transcription (BCP-47)")
     gcs_bucket: Optional[str] = Field(None, description="GCS bucket for large video files (>20MB)")
-
+    remove_music: bool = Field(False, description="Remove background music before transcription")
 
 class DownloadRequest(BaseModel):
     """Request to download videos from URLs."""

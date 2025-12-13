@@ -79,6 +79,7 @@ class AnalysisService:
                 enable_cloud_audio=opts.enable_cloud_audio,
                 cloud_audio_language=opts.cloud_audio_language,
                 gcs_bucket=opts.gcs_bucket,
+                remove_music=opts.remove_music,
             )
 
             # Create analyzer
@@ -219,6 +220,7 @@ class AnalysisService:
             enable_cloud_audio=options.enable_cloud_audio,
             cloud_audio_language=options.cloud_audio_language,
             gcs_bucket=options.gcs_bucket,
+            remove_music=options.remove_music,
         )
 
         analyzer = VideoAnalyzer(config, self.logger)

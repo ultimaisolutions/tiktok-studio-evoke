@@ -60,6 +60,9 @@ class AnalysisConfig:
     # GCS bucket for large video files (>20MB). If None, uses inline content.
     gcs_bucket: Optional[str] = None
 
+    # Remove background music before transcription (uses demucs ML model)
+    remove_music: bool = False
+
     # Scene detection - find cuts/transitions
     scene_detection: bool = False
 
@@ -85,6 +88,7 @@ class AnalysisConfig:
             result["sample_percentage"] = self.sample_percentage
         if self.enable_cloud_audio:
             result["cloud_audio_language"] = self.cloud_audio_language
+            result["remove_music"] = self.remove_music
         return result
 
 
@@ -214,6 +218,8 @@ def get_config(preset: str = "balanced", **overrides) -> AnalysisConfig:
         # Clamp to 1-100 range, then convert to 0.0-1.0
         pct = max(1, min(100, overrides["sample_percentage"]))
         config.sample_percentage = pct / 100.0
+    if "remove_music" in overrides and overrides["remove_music"] is not None:
+        config.remove_music = overrides["remove_music"]
 
     return config
 
@@ -811,10 +817,139 @@ def _analyze_audio(video_path: str) -> Dict[str, Any]:
         }
 
 
+def _extract_audio_as_minimal_video(video_path: str) -> Optional[str]:
+    """
+    Extract audio from video and create a minimal video file for transcription.
+    This creates a very small video (black frame + audio) to avoid the 20MB limit.
+
+    Args:
+        video_path: Path to the original video file
+
+    Returns:
+        Path to minimal video file with audio, or None if failed
+    """
+    import tempfile
+    import subprocess
+
+    try:
+        # Create temp file for output
+        temp_dir = tempfile.mkdtemp(prefix="audio_extract_")
+        output_path = Path(temp_dir) / "audio_video.mp4"
+
+        # Use ffmpeg to create a minimal video with just audio
+        # -an removes audio from first input (null video), audio comes from second input
+        # lavfi creates a black video source, -shortest stops when audio ends
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "color=c=black:s=2x2:r=1",  # Tiny 2x2 black video at 1fps
+            "-i", str(video_path),  # Source video for audio
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "51",  # Minimal quality video
+            "-c:a", "aac", "-b:a", "64k",  # Compressed audio
+            "-map", "0:v", "-map", "1:a",  # Use video from first, audio from second
+            "-shortest",  # Stop when shortest stream ends
+            str(output_path)
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120  # 2 minute timeout
+        )
+
+        if result.returncode == 0 and output_path.exists():
+            return str(output_path)
+
+        # Cleanup on failure
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return None
+
+    except Exception:
+        return None
+
+
+def _remove_music_from_video(video_path: str) -> Optional[str]:
+    """
+    Remove background music from video while preserving speech.
+    Uses the video-music-remover library with demucs ML model.
+
+    Args:
+        video_path: Path to video file
+
+    Returns:
+        Path to processed video file (in temp directory), or None if failed
+    """
+    import subprocess
+    import tempfile
+    import shutil
+
+    try:
+        # Check if video-music-remover is available
+        result = subprocess.run(
+            ["video-music-remover", "version"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+    try:
+        # Create temp directory for output
+        temp_dir = tempfile.mkdtemp(prefix="music_removed_")
+        abs_video_path = str(Path(video_path).resolve())
+
+        # Run video-music-remover
+        cmd = [
+            "video-music-remover",
+            "remove-music",
+            abs_video_path,
+            temp_dir,
+            "--model", "htdemucs"  # Default model, good balance of speed/quality
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minute timeout for processing
+        )
+
+        if result.returncode != 0:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return None
+
+        # Find the processed video file in output directory
+        video_name = Path(video_path).name
+        output_path = Path(temp_dir) / video_name
+
+        if output_path.exists():
+            return str(output_path)
+
+        # If exact name not found, look for any video file
+        for ext in ['.mp4', '.mkv', '.webm']:
+            files = list(Path(temp_dir).glob(f'*{ext}'))
+            if files:
+                return str(files[0])
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return None
+
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return None
+    except Exception:
+        return None
+
+
 def _analyze_audio_cloud(
     video_path: str,
     language_code: str = "en-US",
     gcs_bucket: Optional[str] = None,
+    remove_music: bool = False,
 ) -> Dict[str, Any]:
     """
     Analyze audio using Google Cloud Video Intelligence API.
@@ -825,6 +960,7 @@ def _analyze_audio_cloud(
         language_code: BCP-47 language code (e.g., "en-US", "he-IL")
         gcs_bucket: Optional GCS bucket name for uploading local files.
                     If None, will attempt to use inline content (limited to ~20MB).
+        remove_music: If True, removes background music before transcription
 
     Returns:
         Dict with transcription results and metadata
@@ -846,6 +982,11 @@ def _analyze_audio_cloud(
             "error": "GOOGLE_APPLICATION_CREDENTIALS environment variable not set"
         }
 
+    # Track temp files for cleanup
+    processed_video_path = None
+    audio_extracted_path = None
+    music_removed = False
+
     try:
         # Initialize client with credentials
         credentials = service_account.Credentials.from_service_account_file(creds_path)
@@ -859,7 +1000,23 @@ def _analyze_audio_cloud(
                 "error": f"Video file not found: {video_path}"
             }
 
-        file_size_mb = video_file.stat().st_size / (1024 * 1024)
+        # Remove music if requested
+        actual_video_path = video_path
+        if remove_music:
+            processed_video_path = _remove_music_from_video(video_path)
+            if processed_video_path:
+                actual_video_path = processed_video_path
+                music_removed = True
+            # If music removal fails, continue with original video
+
+        file_size_mb = Path(actual_video_path).stat().st_size / (1024 * 1024)
+
+        # For large files without GCS bucket, extract audio to reduce size
+        if file_size_mb > 20 and not gcs_bucket:
+            audio_extracted_path = _extract_audio_as_minimal_video(actual_video_path)
+            if audio_extracted_path:
+                actual_video_path = audio_extracted_path
+                file_size_mb = Path(actual_video_path).stat().st_size / (1024 * 1024)
 
         # Configure speech transcription
         config = vi.SpeechTranscriptionConfig(
@@ -874,8 +1031,10 @@ def _analyze_audio_cloud(
         # Determine input method based on file size and bucket availability
         if gcs_bucket:
             # Upload to GCS for processing
-            gcs_uri = _upload_to_gcs(video_path, gcs_bucket)
+            gcs_uri = _upload_to_gcs(actual_video_path, gcs_bucket)
             if gcs_uri.startswith("error:"):
+                _cleanup_processed_video(processed_video_path)
+                _cleanup_processed_video(audio_extracted_path)
                 return {"cloud_transcription": None, "error": gcs_uri}
 
             request = vi.AnnotateVideoRequest(
@@ -885,7 +1044,7 @@ def _analyze_audio_cloud(
             )
         elif file_size_mb <= 20:
             # Use inline content for small files
-            with open(video_path, "rb") as f:
+            with open(actual_video_path, "rb") as f:
                 input_content = f.read()
 
             request = vi.AnnotateVideoRequest(
@@ -894,9 +1053,11 @@ def _analyze_audio_cloud(
                 video_context=context,
             )
         else:
+            _cleanup_processed_video(processed_video_path)
+            _cleanup_processed_video(audio_extracted_path)
             return {
                 "cloud_transcription": None,
-                "error": f"Video file too large ({file_size_mb:.1f}MB). Provide gcs_bucket parameter or use file <20MB."
+                "error": f"Video file too large ({file_size_mb:.1f}MB) even after audio extraction. Provide gcs_bucket parameter."
             }
 
         # Process video (this is a long-running operation)
@@ -958,6 +1119,10 @@ def _analyze_audio_cloud(
         combined_transcript = " ".join(full_transcript)
         avg_confidence = total_confidence / confidence_count if confidence_count > 0 else 0
 
+        # Cleanup temp files
+        _cleanup_processed_video(processed_video_path)
+        _cleanup_processed_video(audio_extracted_path)
+
         return {
             "cloud_transcription": {
                 "has_speech": len(combined_transcript) > 0,
@@ -965,15 +1130,34 @@ def _analyze_audio_cloud(
                 "segments": segments,
                 "word_count": len(combined_transcript.split()) if combined_transcript else 0,
                 "confidence": round(avg_confidence, 3),
+                "music_removed": music_removed,
             },
             "language_code": language_code,
         }
 
     except Exception as e:
+        _cleanup_processed_video(processed_video_path)
+        _cleanup_processed_video(audio_extracted_path)
         return {
             "cloud_transcription": None,
             "error": f"Cloud audio analysis failed: {str(e)}"
         }
+
+
+def _cleanup_processed_video(processed_video_path: Optional[str]) -> None:
+    """Clean up temporary processed video and its parent directory."""
+    import shutil
+
+    if processed_video_path and Path(processed_video_path).exists():
+        try:
+            # Remove the parent temp directory
+            parent_dir = Path(processed_video_path).parent
+            if parent_dir.name.startswith("music_removed_"):
+                shutil.rmtree(parent_dir, ignore_errors=True)
+            else:
+                Path(processed_video_path).unlink()
+        except Exception:
+            pass
 
 
 def _upload_to_gcs(video_path: str, bucket_name: str) -> str:
@@ -1177,6 +1361,7 @@ class VideoAnalyzer:
                     video_path,
                     language_code=self.config.cloud_audio_language,
                     gcs_bucket=self.config.gcs_bucket,
+                    remove_music=self.config.remove_music,
                 )
                 # Merge cloud results into audio_metrics
                 if "error" in cloud_audio_result:
@@ -1278,6 +1463,7 @@ class VideoAnalyzer:
             "enable_cloud_audio": self.config.enable_cloud_audio,
             "cloud_audio_language": self.config.cloud_audio_language,
             "gcs_bucket": self.config.gcs_bucket,
+            "remove_music": self.config.remove_music,
             "scene_detection": self.config.scene_detection,
             "thoroughness": self.config.thoroughness,
         }
@@ -1392,6 +1578,7 @@ def _analyze_single_video(args: Tuple[str, Dict]) -> VideoAnalysisResult:
         enable_cloud_audio=config_dict.get("enable_cloud_audio", False),
         cloud_audio_language=config_dict.get("cloud_audio_language", "en-US"),
         gcs_bucket=config_dict.get("gcs_bucket"),
+        remove_music=config_dict.get("remove_music", False),
         scene_detection=config_dict.get("scene_detection", False),
     )
 

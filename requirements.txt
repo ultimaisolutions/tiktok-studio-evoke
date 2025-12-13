@@ -26,6 +26,9 @@ pillow
 # Cloud audio analysis (for speech transcription)
 google-cloud-videointelligence>=2.13.0
 google-cloud-storage>=2.14.0
+
+# Optional: Remove background music before transcription (requires Python 3.10+)
+video-music-remover
 # pytesseract  # Optional: kept for fallback mode when Vision API fails
 
 # Web API dependencies (for FastAPI backend)
