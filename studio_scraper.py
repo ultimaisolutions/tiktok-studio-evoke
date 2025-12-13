@@ -150,7 +150,8 @@ class TikTokStudioScraper:
 
         # Navigate to TikTok Studio
         self.logger.info("Navigating to TikTok Studio...")
-        await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
+        await self.page.goto(STUDIO_HOME_URL, wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(3)  # Allow time for page to fully load
 
         # Check if we're logged in
         self._is_logged_in = await self._check_logged_in()
@@ -177,7 +178,8 @@ class TikTokStudioScraper:
             await asyncio.get_event_loop().run_in_executor(None, input)
 
             # Re-check login status
-            await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
+            await self.page.goto(STUDIO_HOME_URL, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(3)  # Allow time for page to fully load
             self._is_logged_in = await self._check_logged_in()
 
             if not self._is_logged_in:

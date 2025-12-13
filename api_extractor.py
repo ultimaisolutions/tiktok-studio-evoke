@@ -200,6 +200,14 @@ class TikTokAPIExtractor:
         if await self._try_connect_to_existing_browser():
             self.logger.info("Using existing browser with TikTok Studio")
             await self._setup_network_interception()
+
+            # Force page reload to trigger fresh API calls after listeners are attached
+            # This is necessary because the page is already loaded and initial API calls
+            # have already completed before listeners were attached
+            self.logger.info("Reloading page to capture fresh API requests...")
+            await self.page.reload(wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(4)  # Allow time for XHR requests to fire
+
             return True
 
         # Step 2: Fallback to launching new browser
