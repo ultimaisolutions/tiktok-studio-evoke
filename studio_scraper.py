@@ -941,7 +941,7 @@ class TikTokStudioScraper:
         """
         Synchronous helper to fetch a single page of video list from API.
 
-        Uses extracted endpoint from patterns if available.
+        Uses extracted endpoint and headers from patterns if available.
 
         Args:
             cookies: Session cookies
@@ -953,16 +953,27 @@ class TikTokStudioScraper:
         """
         import requests
 
-        # Use endpoint from patterns if available
+        # Default headers to look like a browser request
         base_url = "https://www.tiktok.com/api/creator/item/list/"
+        headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.tiktok.com/tiktokstudio/content',
+        }
+
+        # Use endpoint and headers from patterns if available
         if self._api_patterns and self._api_patterns.get('video_list_api'):
             pattern = self._api_patterns['video_list_api']
             if pattern.get('endpoint'):
                 base_url = pattern['endpoint']
+            # Merge in headers from extracted patterns
+            if pattern.get('headers'):
+                headers.update(pattern['headers'])
 
         request_params = {**params, 'cursor': cursor, 'count': 50}
 
-        response = requests.get(base_url, params=request_params, cookies=cookies, timeout=30)
+        response = requests.get(base_url, params=request_params, cookies=cookies, headers=headers, timeout=30)
         response.raise_for_status()
         return response.json()
 
