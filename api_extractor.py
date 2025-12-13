@@ -241,7 +241,8 @@ class TikTokAPIExtractor:
 
         # Navigate to TikTok Studio
         self.logger.info("Navigating to TikTok Studio...")
-        await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
+        await self.page.goto(STUDIO_HOME_URL, wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(3)  # Allow time for XHR requests to fire
 
         # Check if we're logged in
         self._is_logged_in = await self._check_logged_in()
@@ -263,7 +264,8 @@ class TikTokAPIExtractor:
             await asyncio.get_event_loop().run_in_executor(None, input)
 
             # Re-check login status
-            await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
+            await self.page.goto(STUDIO_HOME_URL, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(3)  # Allow time for XHR requests to fire
             self._is_logged_in = await self._check_logged_in()
 
             if not self._is_logged_in:
@@ -283,7 +285,8 @@ class TikTokAPIExtractor:
         if not self.page:
             return False
 
-        await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
+        await self.page.goto(STUDIO_HOME_URL, wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(3)  # Allow time for XHR requests to fire
         self._is_logged_in = await self._check_logged_in()
 
         if self._is_logged_in:
@@ -541,8 +544,8 @@ class TikTokAPIExtractor:
                 await progress_callback("Navigating to content page...", 0.1)
 
             self.logger.info("Step 1: Navigating to content page...")
-            await self.page.goto(STUDIO_CONTENT_URL, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
+            await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(4)  # Allow time for XHR requests to fire
 
             # Step 2: Look for "צפייה בניתוח נתונים" button or equivalent
             if progress_callback:
@@ -550,15 +553,15 @@ class TikTokAPIExtractor:
 
             self.logger.info("Step 2: Looking for analytics button...")
             await self._click_analytics_button()
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
             # Step 3: Navigate to Studio home for sidebar with videos
             if progress_callback:
                 await progress_callback("Navigating to Studio home...", 0.3)
 
             self.logger.info("Step 3: Navigating to Studio home for sidebar...")
-            await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(3)
+            await self.page.goto(STUDIO_HOME_URL, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(4)  # Allow time for XHR requests to fire
 
             # Step 4: Scroll sidebar to trigger more API calls
             if progress_callback:
@@ -566,7 +569,7 @@ class TikTokAPIExtractor:
 
             self.logger.info("Step 4: Scrolling sidebar...")
             await self._scroll_sidebar()
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
             # Step 5: Click on video items to capture analytics APIs
             if progress_callback:
