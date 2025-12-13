@@ -21,7 +21,7 @@ class AnalysisService:
     def __init__(self, progress_manager: ProgressManager):
         self.progress_manager = progress_manager
         self.logger = logging.getLogger(__name__)
-        self._executor = ThreadPoolExecutor(max_workers=4)
+        self._executor = ThreadPoolExecutor(max_workers=12)  # Allow up to 12 concurrent analyses
         self._active_jobs: Dict[str, Dict[str, Any]] = {}
 
     async def start_analysis(self, request: AnalysisRequest) -> str:
@@ -96,74 +96,90 @@ class AnalysisService:
                 "errors": []
             }
 
-            # Analyze each video with progress tracking
-            for i, (video_path, json_path) in enumerate(video_files):
-                try:
-                    # Broadcast start
-                    await self.progress_manager.analysis_start(
-                        job_id, video_path, i + 1, len(video_files)
-                    )
+            # Determine concurrency level (use workers setting or default to 4)
+            max_concurrent = opts.workers if opts.workers else 4
 
-                    # Run analysis in executor
-                    loop = asyncio.get_event_loop()
-                    analysis_result = await loop.run_in_executor(
-                        self._executor,
-                        analyzer.analyze_video,
-                        video_path
-                    )
+            # Create a semaphore to limit concurrent analysis
+            semaphore = asyncio.Semaphore(max_concurrent)
 
-                    if analysis_result:
-                        # Update metadata JSON - even if there are some non-critical errors
-                        # Critical errors (like no frames) will have empty video_quality
-                        has_critical_error = not analysis_result.video_quality
-
-                        if not has_critical_error:
-                            await loop.run_in_executor(
-                                self._executor,
-                                analyzer.update_metadata_file,
-                                json_path,
-                                analysis_result
-                            )
-
-                            results["analyzed"] += 1
-                            results["videos"].append({
-                                "path": video_path,
-                                "success": True,
-                                "processing_time_ms": analysis_result.processing_time_ms,
-                                "warnings": analysis_result.errors if analysis_result.errors else []
-                            })
-
-                            await self.progress_manager.analysis_complete(
-                                job_id, video_path, True,
-                                metrics={"processing_time_ms": analysis_result.processing_time_ms}
-                            )
-                        else:
-                            results["failed"] += 1
-                            error_msg = analysis_result.errors[0] if analysis_result.errors else "Critical analysis error"
-                            results["errors"].append({"path": video_path, "error": error_msg})
-
-                            await self.progress_manager.analysis_complete(
-                                job_id, video_path, False
-                            )
-                    else:
-                        results["failed"] += 1
-                        results["errors"].append({"path": video_path, "error": "No analysis result returned"})
-
-                        await self.progress_manager.analysis_complete(
-                            job_id, video_path, False
+            async def analyze_single(index: int, video_path: str, json_path: str) -> Dict[str, Any]:
+                """Analyze a single video with semaphore-controlled concurrency."""
+                async with semaphore:
+                    try:
+                        # Broadcast start
+                        await self.progress_manager.analysis_start(
+                            job_id, video_path, index + 1, len(video_files)
                         )
 
-                except Exception as e:
-                    results["failed"] += 1
-                    results["errors"].append({"path": video_path, "error": str(e)})
-                    await self.progress_manager.analysis_complete(job_id, video_path, False)
+                        # Run analysis in executor
+                        loop = asyncio.get_event_loop()
+                        analysis_result = await loop.run_in_executor(
+                            self._executor,
+                            analyzer.analyze_video,
+                            video_path
+                        )
 
-                # Update progress
+                        if analysis_result:
+                            has_critical_error = not analysis_result.video_quality
+
+                            if not has_critical_error:
+                                await loop.run_in_executor(
+                                    self._executor,
+                                    analyzer.update_metadata_file,
+                                    json_path,
+                                    analysis_result
+                                )
+
+                                await self.progress_manager.analysis_complete(
+                                    job_id, video_path, True,
+                                    metrics={"processing_time_ms": analysis_result.processing_time_ms}
+                                )
+
+                                return {
+                                    "success": True,
+                                    "path": video_path,
+                                    "processing_time_ms": analysis_result.processing_time_ms,
+                                    "warnings": analysis_result.errors if analysis_result.errors else []
+                                }
+                            else:
+                                error_msg = analysis_result.errors[0] if analysis_result.errors else "Critical analysis error"
+                                await self.progress_manager.analysis_complete(job_id, video_path, False)
+                                return {"success": False, "path": video_path, "error": error_msg}
+                        else:
+                            await self.progress_manager.analysis_complete(job_id, video_path, False)
+                            return {"success": False, "path": video_path, "error": "No analysis result returned"}
+
+                    except Exception as e:
+                        await self.progress_manager.analysis_complete(job_id, video_path, False)
+                        return {"success": False, "path": video_path, "error": str(e)}
+
+            # Create tasks for all videos
+            tasks = [
+                analyze_single(i, video_path, json_path)
+                for i, (video_path, json_path) in enumerate(video_files)
+            ]
+
+            # Run all tasks concurrently (limited by semaphore)
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Process results
+            for i, result in enumerate(task_results):
+                if isinstance(result, Exception):
+                    results["failed"] += 1
+                    results["errors"].append({"path": video_files[i][0], "error": str(result)})
+                elif result.get("success"):
+                    results["analyzed"] += 1
+                    results["videos"].append(result)
+                else:
+                    results["failed"] += 1
+                    results["errors"].append({"path": result["path"], "error": result.get("error", "Unknown error")})
+
+                # Update progress after each result
                 await self.progress_manager.job_progress(
                     job_id,
                     completed=results["analyzed"] + results["failed"],
                     total=len(video_files),
-                    current_task=f"Analyzed {i + 1}/{len(video_files)}",
+                    current_task=f"Analyzed {results['analyzed'] + results['failed']}/{len(video_files)}",
                     failed=results["failed"]
                 )
 
