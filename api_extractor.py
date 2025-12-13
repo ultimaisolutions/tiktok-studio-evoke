@@ -759,8 +759,8 @@ class TikTokAPIExtractor:
                     await progress_callback(f"Loading analytics for video {i + 1}...", progress)
 
                 # Navigate directly to video analytics page
-                # TikTok Studio analytics URL format
-                analytics_url = f"https://www.tiktok.com/tiktokstudio/analytics/video/{video_id}/overview"
+                # TikTok Studio analytics URL format: /analytics/{video_id}
+                analytics_url = f"https://www.tiktok.com/tiktokstudio/analytics/{video_id}"
                 self.logger.info(f"Navigating to: {analytics_url}")
 
                 await self.page.goto(analytics_url, wait_until="domcontentloaded", timeout=60000)
