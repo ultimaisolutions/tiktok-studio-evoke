@@ -59,6 +59,9 @@ class AnalysisOptions(BaseModel):
     skip_audio: bool = Field(False, description="Skip audio analysis")
     scene_detection: bool = Field(False, description="Enable scene/cut detection")
     full_resolution: bool = Field(False, description="Analyze without downsampling")
+    enable_cloud_audio: bool = Field(True, description="Enable cloud speech transcription")
+    cloud_audio_language: str = Field("en-US", description="Language code for transcription (BCP-47)")
+    gcs_bucket: Optional[str] = Field(None, description="GCS bucket for large video files (>20MB)")
 
 
 class DownloadRequest(BaseModel):

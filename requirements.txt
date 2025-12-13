@@ -22,6 +22,10 @@ ultralytics>=8.0.0
 # OCR dependencies (for tiktok_studio_ocr.py)
 google-cloud-vision>=3.5.0
 pillow
+
+# Cloud audio analysis (for speech transcription)
+google-cloud-videointelligence>=2.13.0
+google-cloud-storage>=2.14.0
 # pytesseract  # Optional: kept for fallback mode when Vision API fails
 
 # Web API dependencies (for FastAPI backend)

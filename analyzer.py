@@ -48,8 +48,17 @@ class AnalysisConfig:
     # Use YOLO for person detection (requires ultralytics)
     use_yolo: bool = False
 
-    # Audio analysis
+    # Audio analysis (local - volume, basic speech detection)
     enable_audio: bool = True
+
+    # Cloud audio analysis (Google Video Intelligence API - speech transcription)
+    enable_cloud_audio: bool = False
+
+    # Language code for cloud transcription (BCP-47 format)
+    cloud_audio_language: str = "en-US"
+
+    # GCS bucket for large video files (>20MB). If None, uses inline content.
+    gcs_bucket: Optional[str] = None
 
     # Scene detection - find cuts/transitions
     scene_detection: bool = False
@@ -70,9 +79,12 @@ class AnalysisConfig:
             "face_model": self.face_model,
             "scene_detection": self.scene_detection,
             "full_resolution": self.full_resolution,
+            "enable_cloud_audio": self.enable_cloud_audio,
         }
         if self.sample_percentage is not None:
             result["sample_percentage"] = self.sample_percentage
+        if self.enable_cloud_audio:
+            result["cloud_audio_language"] = self.cloud_audio_language
         return result
 
 
@@ -87,6 +99,7 @@ THOROUGHNESS_PRESETS: Dict[str, AnalysisConfig] = {
         face_model="short",
         use_yolo=False,
         enable_audio=True,
+        enable_cloud_audio=False,
         scene_detection=False,
         full_resolution=False,
     ),
@@ -98,6 +111,7 @@ THOROUGHNESS_PRESETS: Dict[str, AnalysisConfig] = {
         face_model="short",
         use_yolo=False,
         enable_audio=True,
+        enable_cloud_audio=False,
         scene_detection=False,
         full_resolution=False,
     ),
@@ -109,6 +123,7 @@ THOROUGHNESS_PRESETS: Dict[str, AnalysisConfig] = {
         face_model="full",
         use_yolo=True,
         enable_audio=True,
+        enable_cloud_audio=True,  # Cloud transcription enabled
         scene_detection=True,
         full_resolution=True,
     ),
@@ -120,6 +135,7 @@ THOROUGHNESS_PRESETS: Dict[str, AnalysisConfig] = {
         face_model="full",
         use_yolo=True,
         enable_audio=True,
+        enable_cloud_audio=True,  # Cloud transcription enabled
         scene_detection=True,
         full_resolution=True,
     ),
@@ -131,6 +147,7 @@ THOROUGHNESS_PRESETS: Dict[str, AnalysisConfig] = {
         face_model="full",
         use_yolo=True,           # GPU accelerated person detection
         enable_audio=True,
+        enable_cloud_audio=True,  # Cloud transcription enabled
         scene_detection=True,    # Find cuts/transitions
         full_resolution=True,    # No downsampling for metrics
     ),
@@ -161,6 +178,9 @@ def get_config(preset: str = "balanced", **overrides) -> AnalysisConfig:
         face_model=base.face_model,
         use_yolo=base.use_yolo,
         enable_audio=base.enable_audio,
+        enable_cloud_audio=base.enable_cloud_audio,
+        cloud_audio_language=base.cloud_audio_language,
+        gcs_bucket=base.gcs_bucket,
         scene_detection=base.scene_detection,
         full_resolution=base.full_resolution,
     )
@@ -176,6 +196,12 @@ def get_config(preset: str = "balanced", **overrides) -> AnalysisConfig:
         config.face_model = overrides["face_model"]
     if "enable_audio" in overrides and overrides["enable_audio"] is not None:
         config.enable_audio = overrides["enable_audio"]
+    if "enable_cloud_audio" in overrides and overrides["enable_cloud_audio"] is not None:
+        config.enable_cloud_audio = overrides["enable_cloud_audio"]
+    if "cloud_audio_language" in overrides and overrides["cloud_audio_language"] is not None:
+        config.cloud_audio_language = overrides["cloud_audio_language"]
+    if "gcs_bucket" in overrides and overrides["gcs_bucket"] is not None:
+        config.gcs_bucket = overrides["gcs_bucket"]
     if "workers" in overrides and overrides["workers"] is not None:
         config.workers = overrides["workers"]
     if "use_yolo" in overrides and overrides["use_yolo"] is not None:
@@ -230,6 +256,9 @@ class VideoAnalysisResult:
     # Audio metrics
     audio_metrics: Dict[str, Any] = field(default_factory=dict)
 
+    # Transcription (extracted from cloud_transcription for convenience)
+    transcription: Optional[str] = None
+
     # Processing info
     processing_time_ms: float = 0.0
     errors: List[str] = field(default_factory=list)
@@ -252,6 +281,9 @@ class VideoAnalysisResult:
         # Only include scene_analysis if it has data
         if self.scene_analysis:
             result["scene_analysis"] = self.scene_analysis
+        # Include transcription at top level for easy access
+        if self.transcription:
+            result["transcription"] = self.transcription
         return result
 
 
@@ -779,6 +811,242 @@ def _analyze_audio(video_path: str) -> Dict[str, Any]:
         }
 
 
+def _analyze_audio_cloud(
+    video_path: str,
+    language_code: str = "en-US",
+    gcs_bucket: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Analyze audio using Google Cloud Video Intelligence API.
+    Provides speech transcription with timestamps and confidence scores.
+
+    Args:
+        video_path: Path to local video file
+        language_code: BCP-47 language code (e.g., "en-US", "he-IL")
+        gcs_bucket: Optional GCS bucket name for uploading local files.
+                    If None, will attempt to use inline content (limited to ~20MB).
+
+    Returns:
+        Dict with transcription results and metadata
+    """
+    try:
+        from google.cloud import videointelligence_v1 as vi
+        from google.oauth2 import service_account
+    except ImportError:
+        return {
+            "cloud_transcription": None,
+            "error": "google-cloud-videointelligence not installed. Run: pip install google-cloud-videointelligence"
+        }
+
+    # Check for credentials
+    creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    if not creds_path:
+        return {
+            "cloud_transcription": None,
+            "error": "GOOGLE_APPLICATION_CREDENTIALS environment variable not set"
+        }
+
+    try:
+        # Initialize client with credentials
+        credentials = service_account.Credentials.from_service_account_file(creds_path)
+        video_client = vi.VideoIntelligenceServiceClient(credentials=credentials)
+
+        # Read video file
+        video_file = Path(video_path)
+        if not video_file.exists():
+            return {
+                "cloud_transcription": None,
+                "error": f"Video file not found: {video_path}"
+            }
+
+        file_size_mb = video_file.stat().st_size / (1024 * 1024)
+
+        # Configure speech transcription
+        config = vi.SpeechTranscriptionConfig(
+            language_code=language_code,
+            enable_automatic_punctuation=True,
+            enable_speaker_diarization=True,
+            diarization_speaker_count=2,  # Assume up to 2 speakers for TikTok videos
+        )
+
+        context = vi.VideoContext(speech_transcription_config=config)
+
+        # Determine input method based on file size and bucket availability
+        if gcs_bucket:
+            # Upload to GCS for processing
+            gcs_uri = _upload_to_gcs(video_path, gcs_bucket)
+            if gcs_uri.startswith("error:"):
+                return {"cloud_transcription": None, "error": gcs_uri}
+
+            request = vi.AnnotateVideoRequest(
+                input_uri=gcs_uri,
+                features=[vi.Feature.SPEECH_TRANSCRIPTION],
+                video_context=context,
+            )
+        elif file_size_mb <= 20:
+            # Use inline content for small files
+            with open(video_path, "rb") as f:
+                input_content = f.read()
+
+            request = vi.AnnotateVideoRequest(
+                input_content=input_content,
+                features=[vi.Feature.SPEECH_TRANSCRIPTION],
+                video_context=context,
+            )
+        else:
+            return {
+                "cloud_transcription": None,
+                "error": f"Video file too large ({file_size_mb:.1f}MB). Provide gcs_bucket parameter or use file <20MB."
+            }
+
+        # Process video (this is a long-running operation)
+        operation = video_client.annotate_video(request)
+        result = operation.result(timeout=300)  # 5 minute timeout
+
+        # Extract transcription results
+        annotation_results = result.annotation_results[0]
+
+        if not annotation_results.speech_transcriptions:
+            return {
+                "cloud_transcription": {
+                    "has_speech": False,
+                    "transcript": "",
+                    "segments": [],
+                    "word_count": 0,
+                    "confidence": 0.0,
+                },
+                "language_code": language_code,
+            }
+
+        # Combine all transcription segments
+        full_transcript = []
+        segments = []
+        total_confidence = 0
+        confidence_count = 0
+
+        for transcription in annotation_results.speech_transcriptions:
+            for alternative in transcription.alternatives:
+                if alternative.transcript:
+                    full_transcript.append(alternative.transcript.strip())
+
+                    # Extract segment info with timestamps
+                    segment_info = {
+                        "text": alternative.transcript.strip(),
+                        "confidence": round(alternative.confidence, 3),
+                    }
+
+                    # Add word-level details if available
+                    if alternative.words:
+                        words_data = []
+                        for word_info in alternative.words:
+                            start_time = word_info.start_time.total_seconds()
+                            end_time = word_info.end_time.total_seconds()
+                            words_data.append({
+                                "word": word_info.word,
+                                "start_time": round(start_time, 2),
+                                "end_time": round(end_time, 2),
+                                "speaker_tag": word_info.speaker_tag if word_info.speaker_tag else None,
+                            })
+                        segment_info["words"] = words_data
+                        segment_info["start_time"] = words_data[0]["start_time"] if words_data else None
+                        segment_info["end_time"] = words_data[-1]["end_time"] if words_data else None
+
+                    segments.append(segment_info)
+                    total_confidence += alternative.confidence
+                    confidence_count += 1
+
+        combined_transcript = " ".join(full_transcript)
+        avg_confidence = total_confidence / confidence_count if confidence_count > 0 else 0
+
+        return {
+            "cloud_transcription": {
+                "has_speech": len(combined_transcript) > 0,
+                "transcript": combined_transcript,
+                "segments": segments,
+                "word_count": len(combined_transcript.split()) if combined_transcript else 0,
+                "confidence": round(avg_confidence, 3),
+            },
+            "language_code": language_code,
+        }
+
+    except Exception as e:
+        return {
+            "cloud_transcription": None,
+            "error": f"Cloud audio analysis failed: {str(e)}"
+        }
+
+
+def _upload_to_gcs(video_path: str, bucket_name: str) -> str:
+    """
+    Upload a local video file to Google Cloud Storage.
+
+    Args:
+        video_path: Path to local video file
+        bucket_name: GCS bucket name
+
+    Returns:
+        GCS URI (gs://bucket/path) or error string starting with "error:"
+    """
+    try:
+        from google.cloud import storage
+        from google.oauth2 import service_account
+
+        creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+        credentials = service_account.Credentials.from_service_account_file(creds_path)
+
+        client = storage.Client(credentials=credentials)
+        bucket = client.bucket(bucket_name)
+
+        # Generate unique blob name
+        video_file = Path(video_path)
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        blob_name = f"video_analysis/{timestamp}_{video_file.name}"
+
+        blob = bucket.blob(blob_name)
+        blob.upload_from_filename(video_path)
+
+        return f"gs://{bucket_name}/{blob_name}"
+
+    except Exception as e:
+        return f"error: Failed to upload to GCS: {str(e)}"
+
+
+def _cleanup_gcs_file(gcs_uri: str) -> bool:
+    """
+    Delete a file from Google Cloud Storage after processing.
+
+    Args:
+        gcs_uri: GCS URI (gs://bucket/path)
+
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    try:
+        from google.cloud import storage
+        from google.oauth2 import service_account
+
+        if not gcs_uri.startswith("gs://"):
+            return False
+
+        creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+        credentials = service_account.Credentials.from_service_account_file(creds_path)
+
+        # Parse bucket and blob name from URI
+        parts = gcs_uri[5:].split("/", 1)
+        bucket_name = parts[0]
+        blob_name = parts[1] if len(parts) > 1 else ""
+
+        client = storage.Client(credentials=credentials)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        blob.delete()
+
+        return True
+
+    except Exception:
+        return False
+
+
 # =============================================================================
 # Main Analyzer Class
 # =============================================================================
@@ -893,7 +1161,7 @@ class VideoAnalyzer:
         except Exception as e:
             errors.append(f"Face/person detection failed: {e}")
 
-        # Audio analysis
+        # Audio analysis (local)
         if self.config.enable_audio:
             try:
                 result.audio_metrics = _analyze_audio(video_path)
@@ -901,6 +1169,26 @@ class VideoAnalyzer:
                 errors.append(f"Audio analysis failed: {e}")
         else:
             result.audio_metrics = {"has_audio": None, "skipped": True}
+
+        # Cloud audio analysis (Google Video Intelligence API - speech transcription)
+        if self.config.enable_cloud_audio:
+            try:
+                cloud_audio_result = _analyze_audio_cloud(
+                    video_path,
+                    language_code=self.config.cloud_audio_language,
+                    gcs_bucket=self.config.gcs_bucket,
+                )
+                # Merge cloud results into audio_metrics
+                if "error" in cloud_audio_result:
+                    errors.append(f"Cloud audio: {cloud_audio_result['error']}")
+                else:
+                    result.audio_metrics.update(cloud_audio_result)
+                    # Extract transcript to top-level field for convenience
+                    cloud_transcription = cloud_audio_result.get("cloud_transcription", {})
+                    if cloud_transcription and cloud_transcription.get("transcript"):
+                        result.transcription = cloud_transcription["transcript"]
+            except Exception as e:
+                errors.append(f"Cloud audio analysis failed: {e}")
 
         # Scene detection (when enabled - GPU intensive)
         if self.config.scene_detection:
@@ -987,6 +1275,10 @@ class VideoAnalyzer:
             "face_model": self.config.face_model,
             "use_yolo": self.config.use_yolo,
             "enable_audio": self.config.enable_audio,
+            "enable_cloud_audio": self.config.enable_cloud_audio,
+            "cloud_audio_language": self.config.cloud_audio_language,
+            "gcs_bucket": self.config.gcs_bucket,
+            "scene_detection": self.config.scene_detection,
             "thoroughness": self.config.thoroughness,
         }
 
@@ -1097,6 +1389,10 @@ def _analyze_single_video(args: Tuple[str, Dict]) -> VideoAnalysisResult:
         face_model=config_dict.get("face_model", "short"),
         use_yolo=config_dict.get("use_yolo", False),
         enable_audio=config_dict.get("enable_audio", True),
+        enable_cloud_audio=config_dict.get("enable_cloud_audio", False),
+        cloud_audio_language=config_dict.get("cloud_audio_language", "en-US"),
+        gcs_bucket=config_dict.get("gcs_bucket"),
+        scene_detection=config_dict.get("scene_detection", False),
     )
 
     # Create analyzer and process

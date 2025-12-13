@@ -259,6 +259,24 @@ function VideosView() {
                         ? 'Yes'
                         : 'No'}
                     </dd>
+                    {selectedVideo.analysis.transcription && (
+                      <>
+                        <dt>Transcription</dt>
+                        <dd className="transcription-text">
+                          {selectedVideo.analysis.transcription}
+                        </dd>
+                      </>
+                    )}
+                    {selectedVideo.analysis.audio_metrics?.cloud_transcription && (
+                      <>
+                        <dt>Speech Confidence</dt>
+                        <dd>
+                          {(selectedVideo.analysis.audio_metrics.cloud_transcription.confidence * 100).toFixed(1)}%
+                        </dd>
+                        <dt>Word Count</dt>
+                        <dd>{selectedVideo.analysis.audio_metrics.cloud_transcription.word_count}</dd>
+                      </>
+                    )}
                   </dl>
                 </div>
               )}

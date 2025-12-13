@@ -15,6 +15,8 @@ function AnalysisView() {
   const [skipAudio, setSkipAudio] = useState(false);
   const [sceneDetection, setSceneDetection] = useState(false);
   const [fullResolution, setFullResolution] = useState(false);
+  const [enableCloudAudio, setEnableCloudAudio] = useState(true);
+  const [cloudAudioLanguage, setCloudAudioLanguage] = useState('en-US');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Job state
@@ -45,6 +47,8 @@ function AnalysisView() {
           skip_audio: skipAudio,
           scene_detection: sceneDetection,
           full_resolution: fullResolution,
+          enable_cloud_audio: enableCloudAudio,
+          cloud_audio_language: cloudAudioLanguage,
         },
       };
 
@@ -229,6 +233,43 @@ function AnalysisView() {
                     Skip audio analysis
                   </label>
                 </div>
+
+                <div className="checkbox-group mt-2">
+                  <input
+                    type="checkbox"
+                    id="enableCloudAudio"
+                    checked={enableCloudAudio}
+                    onChange={(e) => setEnableCloudAudio(e.target.checked)}
+                    disabled={isRunning || skipAudio}
+                  />
+                  <label htmlFor="enableCloudAudio">
+                    Enable cloud speech transcription (Google Video Intelligence)
+                  </label>
+                </div>
+
+                {enableCloudAudio && !skipAudio && (
+                  <div className="form-group mt-2" style={{ marginLeft: '24px' }}>
+                    <label htmlFor="cloudAudioLanguage">Transcription Language</label>
+                    <select
+                      id="cloudAudioLanguage"
+                      value={cloudAudioLanguage}
+                      onChange={(e) => setCloudAudioLanguage(e.target.value)}
+                      disabled={isRunning}
+                      style={{ width: '200px' }}
+                    >
+                      <option value="en-US">English (US)</option>
+                      <option value="en-GB">English (UK)</option>
+                      <option value="he-IL">Hebrew</option>
+                      <option value="es-ES">Spanish</option>
+                      <option value="fr-FR">French</option>
+                      <option value="de-DE">German</option>
+                      <option value="pt-BR">Portuguese (Brazil)</option>
+                      <option value="ja-JP">Japanese</option>
+                      <option value="ko-KR">Korean</option>
+                      <option value="zh-CN">Chinese (Simplified)</option>
+                    </select>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -76,6 +76,9 @@ class AnalysisService:
                 enable_audio=not opts.skip_audio,
                 scene_detection=opts.scene_detection,
                 full_resolution=opts.full_resolution,
+                enable_cloud_audio=opts.enable_cloud_audio,
+                cloud_audio_language=opts.cloud_audio_language,
+                gcs_bucket=opts.gcs_bucket,
             )
 
             # Create analyzer
@@ -109,30 +112,42 @@ class AnalysisService:
                         video_path
                     )
 
-                    if analysis_result and not analysis_result.errors:
-                        # Update metadata JSON
-                        await loop.run_in_executor(
-                            self._executor,
-                            analyzer.update_metadata_file,
-                            json_path,
-                            analysis_result
-                        )
+                    if analysis_result:
+                        # Update metadata JSON - even if there are some non-critical errors
+                        # Critical errors (like no frames) will have empty video_quality
+                        has_critical_error = not analysis_result.video_quality
 
-                        results["analyzed"] += 1
-                        results["videos"].append({
-                            "path": video_path,
-                            "success": True,
-                            "processing_time_ms": analysis_result.processing_time_ms
-                        })
+                        if not has_critical_error:
+                            await loop.run_in_executor(
+                                self._executor,
+                                analyzer.update_metadata_file,
+                                json_path,
+                                analysis_result
+                            )
 
-                        await self.progress_manager.analysis_complete(
-                            job_id, video_path, True,
-                            metrics={"processing_time_ms": analysis_result.processing_time_ms}
-                        )
+                            results["analyzed"] += 1
+                            results["videos"].append({
+                                "path": video_path,
+                                "success": True,
+                                "processing_time_ms": analysis_result.processing_time_ms,
+                                "warnings": analysis_result.errors if analysis_result.errors else []
+                            })
+
+                            await self.progress_manager.analysis_complete(
+                                job_id, video_path, True,
+                                metrics={"processing_time_ms": analysis_result.processing_time_ms}
+                            )
+                        else:
+                            results["failed"] += 1
+                            error_msg = analysis_result.errors[0] if analysis_result.errors else "Critical analysis error"
+                            results["errors"].append({"path": video_path, "error": error_msg})
+
+                            await self.progress_manager.analysis_complete(
+                                job_id, video_path, False
+                            )
                     else:
                         results["failed"] += 1
-                        error_msg = analysis_result.errors[0] if analysis_result and analysis_result.errors else "Unknown error"
-                        results["errors"].append({"path": video_path, "error": error_msg})
+                        results["errors"].append({"path": video_path, "error": "No analysis result returned"})
 
                         await self.progress_manager.analysis_complete(
                             job_id, video_path, False
@@ -185,6 +200,9 @@ class AnalysisService:
             enable_audio=not options.skip_audio,
             scene_detection=options.scene_detection,
             full_resolution=options.full_resolution,
+            enable_cloud_audio=options.enable_cloud_audio,
+            cloud_audio_language=options.cloud_audio_language,
+            gcs_bucket=options.gcs_bucket,
         )
 
         analyzer = VideoAnalyzer(config, self.logger)
