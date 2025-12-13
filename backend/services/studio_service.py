@@ -35,7 +35,7 @@ def _run_async_in_thread(coro):
         loop.close()
 
 
-def _run_full_session_sync(scraper, video_scraper, analyzer, skip_download, skip_analysis):
+def _run_full_session_sync(scraper, video_scraper, analyzer, skip_download, skip_analysis, progress_callback=None):
     """
     Run entire scraper session in a SINGLE event loop.
 
@@ -52,13 +52,23 @@ def _run_full_session_sync(scraper, video_scraper, analyzer, skip_download, skip
             # Note: The loop stays open so we can continue later
             return {"needs_login": True, "loop": loop}
 
-        # Run scraping in the SAME loop
-        results = loop.run_until_complete(scraper.scrape_all_videos(
-            video_scraper=video_scraper,
-            analyzer=analyzer,
-            skip_download=skip_download,
-            skip_analysis=skip_analysis,
-        ))
+        # Use parallel scraping if num_workers > 1
+        if scraper.num_workers > 1:
+            results = loop.run_until_complete(scraper.scrape_all_videos_parallel(
+                video_scraper=video_scraper,
+                analyzer=analyzer,
+                skip_download=skip_download,
+                skip_analysis=skip_analysis,
+                progress_callback=progress_callback,
+            ))
+        else:
+            # Fall back to sequential scraping
+            results = loop.run_until_complete(scraper.scrape_all_videos(
+                video_scraper=video_scraper,
+                analyzer=analyzer,
+                skip_download=skip_download,
+                skip_analysis=skip_analysis,
+            ))
 
         # Clean up
         loop.run_until_complete(scraper.close())
@@ -78,7 +88,7 @@ def _run_full_session_sync(scraper, video_scraper, analyzer, skip_download, skip
         return {"error": str(e), "traceback": traceback.format_exc()}
 
 
-def _continue_session_after_login_sync(scraper, loop, video_scraper, analyzer, skip_download, skip_analysis):
+def _continue_session_after_login_sync(scraper, loop, video_scraper, analyzer, skip_download, skip_analysis, progress_callback=None):
     """
     Continue scraper session after manual login, using the SAME event loop.
     """
@@ -91,13 +101,23 @@ def _continue_session_after_login_sync(scraper, loop, video_scraper, analyzer, s
 
         scraper._is_logged_in = True
 
-        # Run scraping in the SAME loop
-        results = loop.run_until_complete(scraper.scrape_all_videos(
-            video_scraper=video_scraper,
-            analyzer=analyzer,
-            skip_download=skip_download,
-            skip_analysis=skip_analysis,
-        ))
+        # Use parallel scraping if num_workers > 1
+        if scraper.num_workers > 1:
+            results = loop.run_until_complete(scraper.scrape_all_videos_parallel(
+                video_scraper=video_scraper,
+                analyzer=analyzer,
+                skip_download=skip_download,
+                skip_analysis=skip_analysis,
+                progress_callback=progress_callback,
+            ))
+        else:
+            # Fall back to sequential scraping
+            results = loop.run_until_complete(scraper.scrape_all_videos(
+                video_scraper=video_scraper,
+                analyzer=analyzer,
+                skip_download=skip_download,
+                skip_analysis=skip_analysis,
+            ))
 
         # Clean up
         loop.run_until_complete(scraper.close())
@@ -171,7 +191,11 @@ class StudioService:
                         logger=self.logger,
                         browser_type=request.studio_browser.value,
                         cdp_port=request.cdp_port,
-                        username=request.username
+                        username=request.username,
+                        # Parallelization options
+                        num_workers=request.studio_workers or 2,
+                        request_delay_ms=request.request_delay_ms or 1500,
+                        download_workers=request.download_workers or 4,
                     )
                     self._scrapers[session_id] = scraper
                 except Exception as init_error:

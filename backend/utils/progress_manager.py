@@ -133,18 +133,22 @@ class ProgressManager:
         completed: int,
         total: int,
         current_task: Optional[str] = None,
-        failed: int = 0
+        failed: int = 0,
+        **kwargs
     ) -> None:
         """Broadcast job progress update."""
         progress = completed / total if total > 0 else 0
-        await self.broadcast(job_id, "job_progress", {
+        data = {
             "status": "running",
             "completed": completed,
             "total": total,
             "failed": failed,
             "progress": progress,
             "current_task": current_task
-        })
+        }
+        # Add any extra fields (workers_active, current_videos, downloaded, analyzed, etc.)
+        data.update(kwargs)
+        await self.broadcast(job_id, "job_progress", data)
 
     async def job_completed(
         self,
