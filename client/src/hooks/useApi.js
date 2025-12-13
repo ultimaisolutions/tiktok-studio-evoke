@@ -116,6 +116,18 @@ export const api = {
     apiFetch(`/videos/${videoId}/open-in-explorer?output_dir=${encodeURIComponent(outputDir)}`, {
       method: 'POST',
     }),
+
+  // API Extraction
+  startExtraction: (request) => apiFetch('/extractor/start', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  }),
+  getExtractionStatus: (sessionId) => apiFetch(`/extractor/status/${sessionId}`),
+  continueExtraction: (sessionId) => apiFetch(`/extractor/continue/${sessionId}`, { method: 'POST' }),
+  stopExtraction: (sessionId) => apiFetch(`/extractor/stop/${sessionId}`, { method: 'POST' }),
+  getPatterns: () => apiFetch('/extractor/patterns'),
+  applyPatterns: () => apiFetch('/extractor/apply', { method: 'POST' }),
+  deletePatterns: () => apiFetch('/extractor/patterns', { method: 'DELETE' }),
 };
 
 export default useApi;

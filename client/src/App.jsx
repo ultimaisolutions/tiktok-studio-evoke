@@ -6,6 +6,7 @@ import DownloadView from './components/Views/DownloadView';
 import StudioView from './components/Views/StudioView';
 import AnalysisView from './components/Views/AnalysisView';
 import VideosView from './components/Views/VideosView';
+import APIExtractionView from './components/Views/APIExtractionView';
 
 function App() {
   const [activeView, setActiveView] = useState('download');
@@ -20,6 +21,8 @@ function App() {
         return <AnalysisView />;
       case 'videos':
         return <VideosView />;
+      case 'extractor':
+        return <APIExtractionView />;
       default:
         return <DownloadView />;
     }

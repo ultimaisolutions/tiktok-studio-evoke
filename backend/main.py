@@ -23,6 +23,7 @@ from backend.routes import (
     websocket_router,
     videos_router,
     config_router,
+    api_extraction_router,
 )
 
 # Configure logging
@@ -89,6 +90,7 @@ app.include_router(studio_router, prefix="/api")
 app.include_router(analysis_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
+app.include_router(api_extraction_router, prefix="/api")
 app.include_router(websocket_router)  # WebSocket at root level
 
 
@@ -105,6 +107,7 @@ async def root():
             "analysis": "/api/analysis",
             "videos": "/api/videos",
             "config": "/api/config",
+            "extractor": "/api/extractor",
             "websocket": "/ws/{job_id}"
         }
     }

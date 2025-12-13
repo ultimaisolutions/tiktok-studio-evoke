@@ -143,3 +143,46 @@ class ConfigResponse(BaseModel):
         "maximum": {"frame_percent": 70, "color_clusters": 12, "motion_res": 720, "yolo": True, "scene_detect": True},
         "extreme": {"frame_percent": 80, "color_clusters": 16, "motion_res": 1080, "yolo": True, "scene_detect": True},
     })
+
+
+# ========== API Extraction Models ==========
+
+class APIPattern(BaseModel):
+    """Represents an extracted API pattern."""
+    endpoint: str = Field(..., description="API endpoint URL (without query params)")
+    method: str = Field(..., description="HTTP method (GET, POST, etc.)")
+    headers: Dict[str, str] = Field(default_factory=dict, description="Request headers structure")
+    query_params: Dict[str, Any] = Field(default_factory=dict, description="Query parameters")
+    request_body_schema: Optional[Dict[str, Any]] = Field(None, description="Request body JSON schema")
+    response_schema: Dict[str, Any] = Field(default_factory=dict, description="Response JSON schema")
+    sample_response: Optional[Dict[str, Any]] = Field(None, description="Truncated sample response")
+    captured_at: datetime = Field(default_factory=datetime.now, description="When pattern was captured")
+    category: str = Field("unknown", description="API category: video_list, analytics, creator, other")
+
+
+class APIPatternCollection(BaseModel):
+    """Collection of extracted API patterns."""
+    video_list_api: Optional[APIPattern] = Field(None, description="Video list API pattern")
+    analytics_api: Optional[APIPattern] = Field(None, description="Analytics API pattern")
+    other_apis: List[APIPattern] = Field(default_factory=list, description="Other discovered APIs")
+    last_updated: datetime = Field(default_factory=datetime.now, description="Last update timestamp")
+
+
+class ExtractionRequest(BaseModel):
+    """Request to start API pattern extraction."""
+    studio_browser: StudioBrowserType = Field(StudioBrowserType.chromium, description="Playwright browser")
+    cdp_port: Optional[int] = Field(None, ge=1, le=65535, description="CDP port for existing browser")
+    sample_video_count: int = Field(3, ge=1, le=10, description="Number of videos to sample for analytics APIs")
+
+
+class ExtractionStatus(BaseModel):
+    """Status of an API extraction session."""
+    session_id: str
+    status: JobStatusEnum
+    progress: float = Field(0.0, ge=0.0, le=1.0)
+    current_task: Optional[str] = None
+    total_requests_captured: int = 0
+    relevant_patterns: int = 0
+    needs_login: bool = False
+    error: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None

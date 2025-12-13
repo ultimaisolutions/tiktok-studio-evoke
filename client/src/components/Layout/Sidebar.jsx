@@ -5,6 +5,7 @@ const menuItems = [
   { id: 'studio', label: 'Studio', icon: '◎' },
   { id: 'analysis', label: 'Analysis', icon: '◈' },
   { id: 'videos', label: 'Videos', icon: '▶' },
+  { id: 'extractor', label: 'API Extract', icon: '⚡' },
 ];
 
 function Sidebar({ activeView, onViewChange }) {

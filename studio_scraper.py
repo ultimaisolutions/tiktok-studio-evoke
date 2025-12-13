@@ -33,6 +33,9 @@ STUDIO_HOME_URL = "https://www.tiktok.com/tiktokstudio"
 STUDIO_CONTENT_URL = "https://www.tiktok.com/tiktokstudio/content"
 TIKTOK_LOGIN_URL = "https://www.tiktok.com/login"
 
+# API patterns file path
+API_PATTERNS_FILE = Path("api_patterns.json")
+
 # Tab names (Hebrew UI based on screenshots)
 TAB_NAMES = {
     "overview": "סקירה כללית",
@@ -79,6 +82,9 @@ class TikTokStudioScraper:
         self._is_logged_in = False
         self._processed_videos = set()
         self._connected_to_existing = False
+
+        # Load API patterns if available
+        self._api_patterns = self._load_api_patterns()
 
     async def initialize(self, interactive: bool = True) -> bool:
         """
@@ -877,13 +883,44 @@ class TikTokStudioScraper:
         cookies = await self.context.cookies()
         return {cookie['name']: cookie['value'] for cookie in cookies}
 
+    def _load_api_patterns(self) -> Optional[dict]:
+        """
+        Load API patterns from file if available.
+
+        Returns:
+            Dictionary with API patterns or None if not found
+        """
+        try:
+            if API_PATTERNS_FILE.exists():
+                with open(API_PATTERNS_FILE, 'r', encoding='utf-8') as f:
+                    patterns = json.load(f)
+                    if patterns.get('video_list_api'):
+                        self.logger.info("Loaded API patterns from file")
+                        return patterns
+        except Exception as e:
+            self.logger.warning(f"Failed to load API patterns: {e}")
+        return None
+
     def _get_api_params(self) -> dict:
         """
         Get standard query parameters for TikTok Studio API requests.
 
+        Uses extracted patterns if available, otherwise falls back to defaults.
+
         Returns:
             Dictionary of query parameters
         """
+        # Check if we have extracted patterns with query params
+        if self._api_patterns and self._api_patterns.get('video_list_api'):
+            pattern = self._api_patterns['video_list_api']
+            if pattern.get('query_params'):
+                self.logger.info("Using extracted API query parameters")
+                # Filter out pagination params - those are handled separately
+                params = {k: v for k, v in pattern['query_params'].items()
+                          if k not in ('cursor', 'count')}
+                return params
+
+        # Default parameters
         import time
         return {
             'aid': '1988',
@@ -902,6 +939,8 @@ class TikTokStudioScraper:
         """
         Synchronous helper to fetch a single page of video list from API.
 
+        Uses extracted endpoint from patterns if available.
+
         Args:
             cookies: Session cookies
             params: API parameters
@@ -912,7 +951,13 @@ class TikTokStudioScraper:
         """
         import requests
 
+        # Use endpoint from patterns if available
         base_url = "https://www.tiktok.com/api/creator/item/list/"
+        if self._api_patterns and self._api_patterns.get('video_list_api'):
+            pattern = self._api_patterns['video_list_api']
+            if pattern.get('endpoint'):
+                base_url = pattern['endpoint']
+
         request_params = {**params, 'cursor': cursor, 'count': 50}
 
         response = requests.get(base_url, params=request_params, cookies=cookies, timeout=30)

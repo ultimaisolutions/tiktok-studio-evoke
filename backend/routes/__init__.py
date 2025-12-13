@@ -4,6 +4,7 @@ from .analysis import router as analysis_router
 from .websocket import router as websocket_router
 from .videos import router as videos_router
 from .config import router as config_router
+from .api_extraction import router as api_extraction_router
 
 __all__ = [
     "scraper_router",
@@ -12,4 +13,5 @@ __all__ = [
     "websocket_router",
     "videos_router",
     "config_router",
+    "api_extraction_router",
 ]
