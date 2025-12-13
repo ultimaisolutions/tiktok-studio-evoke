@@ -941,7 +941,8 @@ class TikTokStudioScraper:
         """
         Synchronous helper to fetch a single page of video list from API.
 
-        Uses extracted endpoint and headers from patterns if available.
+        Uses extracted endpoint, method, and headers from patterns if available.
+        Supports both GET and POST methods based on what was captured during extraction.
 
         Args:
             cookies: Session cookies
@@ -953,27 +954,70 @@ class TikTokStudioScraper:
         """
         import requests
 
-        # Default headers to look like a browser request
+        # Default configuration
         base_url = "https://www.tiktok.com/api/creator/item/list/"
+        method = "GET"
         headers = {
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'en-US,en;q=0.9',
+            'Content-Type': 'application/json',
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://www.tiktok.com/tiktokstudio/content',
         }
+        request_body = None
 
-        # Use endpoint and headers from patterns if available
+        # Use endpoint, method, and headers from patterns if available
         if self._api_patterns and self._api_patterns.get('video_list_api'):
             pattern = self._api_patterns['video_list_api']
+
             if pattern.get('endpoint'):
                 base_url = pattern['endpoint']
+                self.logger.info(f"Using extracted endpoint: {base_url}")
+
+            if pattern.get('method'):
+                method = pattern['method'].upper()
+                self.logger.info(f"Using extracted method: {method}")
+
             # Merge in headers from extracted patterns
             if pattern.get('headers'):
                 headers.update(pattern['headers'])
 
+            # For POST requests, build request body
+            if method == "POST":
+                request_body = {
+                    "cursor": cursor,
+                    "size": 50,
+                    "query": {
+                        "sort_orders": [],
+                    },
+                    "conditions": [],
+                    "is_recent_posts": False,
+                }
+
+        # Include query params in URL
         request_params = {**params, 'cursor': cursor, 'count': 50}
 
-        response = requests.get(base_url, params=request_params, cookies=cookies, headers=headers, timeout=30)
+        # Make request using appropriate method
+        if method == "POST":
+            self.logger.debug(f"POST {base_url} with body: {request_body}")
+            response = requests.post(
+                base_url,
+                params=request_params,
+                json=request_body,
+                cookies=cookies,
+                headers=headers,
+                timeout=30
+            )
+        else:
+            self.logger.debug(f"GET {base_url}")
+            response = requests.get(
+                base_url,
+                params=request_params,
+                cookies=cookies,
+                headers=headers,
+                timeout=30
+            )
+
         response.raise_for_status()
         return response.json()
 
