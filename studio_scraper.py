@@ -1469,23 +1469,30 @@ class TikTokStudioScraper:
 
             # Tab 1: Overview (סקירה כללית) - should be default
             self.logger.info(f"  Capturing Overview tab...")
+            # Verify we're on overview tab, or navigate to it explicitly
+            if not await self._verify_tab_switch("overview"):
+                await self._click_tab("overview")
             overview_path = output_folder / f"{video_id}_overview.png"
             await self._capture_tab_screenshot("overview", overview_path)
             screenshots["overview"] = str(overview_path)
 
             # Tab 2: Viewers (צופים)
             self.logger.info(f"  Capturing Viewers tab...")
-            await self._click_tab("viewers")
-            viewers_path = output_folder / f"{video_id}_viewers.png"
-            await self._capture_tab_screenshot("viewers", viewers_path)
-            screenshots["viewers"] = str(viewers_path)
+            if await self._click_tab("viewers"):
+                viewers_path = output_folder / f"{video_id}_viewers.png"
+                await self._capture_tab_screenshot("viewers", viewers_path)
+                screenshots["viewers"] = str(viewers_path)
+            else:
+                self.logger.warning(f"  Failed to switch to Viewers tab - screenshot skipped")
 
             # Tab 3: Engagement (מעורבות)
             self.logger.info(f"  Capturing Engagement tab...")
-            await self._click_tab("engagement")
-            engagement_path = output_folder / f"{video_id}_engagement.png"
-            await self._capture_tab_screenshot("engagement", engagement_path)
-            screenshots["engagement"] = str(engagement_path)
+            if await self._click_tab("engagement"):
+                engagement_path = output_folder / f"{video_id}_engagement.png"
+                await self._capture_tab_screenshot("engagement", engagement_path)
+                screenshots["engagement"] = str(engagement_path)
+            else:
+                self.logger.warning(f"  Failed to switch to Engagement tab - screenshot skipped")
 
             result["screenshots"] = screenshots
 
@@ -1593,6 +1600,107 @@ class TikTokStudioScraper:
 
         return metadata
 
+    async def _verify_tab_switch(self, tab_name: str) -> bool:
+        """
+        Verify that tab content has loaded by checking for tab-specific elements.
+
+        Args:
+            tab_name: Tab identifier (overview, viewers, engagement)
+
+        Returns:
+            True if tab appears to be loaded
+        """
+        try:
+            # Check URL contains tab name (for viewers/engagement)
+            if tab_name in ["viewers", "engagement"]:
+                if f"/{tab_name}" not in self.page.url:
+                    return False
+
+            # Wait for network to settle
+            try:
+                await self.page.wait_for_load_state("networkidle", timeout=5000)
+            except:
+                pass  # Continue even if timeout
+
+            # Check for tab-specific content indicators
+            tab_indicators = {
+                "overview": '[data-tt*="Overview"], [class*="overview"]',
+                "viewers": '[data-tt*="Viewers"], [class*="viewers"], :text("סוגי הצופים")',
+                "engagement": '[data-tt*="Engagement"], [class*="engagement"], :text("שימור")',
+            }
+
+            indicator = tab_indicators.get(tab_name)
+            if indicator:
+                try:
+                    await self.page.wait_for_selector(indicator, timeout=3000)
+                    return True
+                except:
+                    pass
+
+            return True  # Proceed anyway if no indicator found
+
+        except Exception as e:
+            self.logger.debug(f"Error verifying tab switch: {e}")
+            return True  # Proceed anyway on error
+
+    async def _navigate_to_tab_via_url(self, tab_name: str) -> bool:
+        """
+        Navigate to a tab via direct URL manipulation.
+
+        Args:
+            tab_name: Tab identifier (overview, viewers, engagement)
+
+        Returns:
+            True if navigation succeeded
+        """
+        tab_url_suffix = {
+            "overview": "/overview",
+            "viewers": "/viewers",
+            "engagement": "/engagement",
+        }
+
+        if tab_name not in tab_url_suffix:
+            return False
+
+        try:
+            current_url = self.page.url
+            # Remove any existing tab suffix
+            base_url = re.sub(r'/(overview|viewers|engagement)/?$', '', current_url)
+            new_url = base_url + tab_url_suffix[tab_name]
+
+            self.logger.info(f"    Navigating to: {new_url}")
+            await self.page.goto(new_url, wait_until="domcontentloaded", timeout=30000)
+
+            # Wait for API calls to complete
+            await asyncio.sleep(2)
+
+            # Verify navigation worked
+            return await self._verify_tab_switch(tab_name)
+
+        except Exception as e:
+            self.logger.error(f"    URL navigation failed: {e}")
+            return False
+
+    async def _debug_tab_elements(self):
+        """Debug helper to log available tab elements."""
+        debug_selectors = [
+            '[data-tt*="Header"]',
+            '[data-tt*="Tab"]',
+            '[role="tab"]',
+            '[role="tablist"]',
+        ]
+
+        for selector in debug_selectors:
+            try:
+                elements = await self.page.query_selector_all(selector)
+                if elements:
+                    self.logger.debug(f"Found {len(elements)} elements for '{selector}'")
+                    for i, el in enumerate(elements[:3]):
+                        text = await el.inner_text()
+                        self.logger.debug(f"  [{i}]: {text[:50]}...")
+            except:
+                pass
+
     async def _click_tab(self, tab_name: str) -> bool:
         """
         Click on a specific analytics tab.
@@ -1608,13 +1716,16 @@ class TikTokStudioScraper:
             if not hebrew_name:
                 return False
 
-            # Try multiple selector strategies
+            # Primary selector using confirmed data-tt attribute from TikTok Studio DOM
             selectors = [
-                f'button:has-text("{hebrew_name}")',
-                f'a:has-text("{hebrew_name}")',
-                f'div:has-text("{hebrew_name}")',
+                # Primary: Exact data-tt attribute match (confirmed working structure)
+                f'[data-tt="Header_HeaderTabBar_Container"]:has-text("{hebrew_name}")',
+                # Fallback: Partial data-tt match
+                f'[data-tt*="HeaderTabBar"]:has-text("{hebrew_name}")',
+                # Role-based fallback
                 f'[role="tab"]:has-text("{hebrew_name}")',
-                f'text="{hebrew_name}"',
+                # Last resort: exact text match on div
+                f'div:text-is("{hebrew_name}")',
             ]
 
             for selector in selectors:
@@ -1622,27 +1733,21 @@ class TikTokStudioScraper:
                     element = await self.page.query_selector(selector)
                     if element:
                         await element.click()
-                        await asyncio.sleep(2)  # Wait for tab content to load
-                        return True
-                except:
+                        await asyncio.sleep(1.5)  # Wait for tab content
+
+                        # Verify the tab actually switched
+                        if await self._verify_tab_switch(tab_name):
+                            self.logger.info(f"    Tab '{tab_name}' clicked via: {selector}")
+                            return True
+                        else:
+                            self.logger.debug(f"    Click succeeded but tab didn't switch: {selector}")
+                except Exception as e:
+                    self.logger.debug(f"    Selector failed '{selector}': {e}")
                     continue
 
-            # Fallback: try clicking by position based on URL pattern
-            # Tabs change URL: /analytics/{id} -> /analytics/{id}/viewers -> /analytics/{id}/engagement
-            tab_url_suffix = {
-                "viewers": "/viewers",
-                "engagement": "/engagement",
-            }
-
-            if tab_name in tab_url_suffix:
-                current_url = self.page.url
-                base_url = re.sub(r'/(viewers|engagement)$', '', current_url)
-                new_url = base_url + tab_url_suffix[tab_name]
-                await self.page.goto(new_url, wait_until="networkidle", timeout=30000)
-                await asyncio.sleep(2)
-                return True
-
-            return False
+            # Fallback: URL navigation
+            self.logger.warning(f"    All selectors failed for '{tab_name}', trying URL navigation")
+            return await self._navigate_to_tab_via_url(tab_name)
 
         except Exception as e:
             self.logger.debug(f"Error clicking tab {tab_name}: {e}")
