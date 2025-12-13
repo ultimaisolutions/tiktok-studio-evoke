@@ -14,6 +14,12 @@ function StudioView() {
   const [skipAnalysis, setSkipAnalysis] = useState(false);
   const [thoroughness, setThoroughness] = useState('extreme');
 
+  // Parallelization options
+  const [studioWorkers, setStudioWorkers] = useState(2);
+  const [downloadWorkers, setDownloadWorkers] = useState(4);
+  const [requestDelay, setRequestDelay] = useState(1500);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   // Session state
   const [sessionId, setSessionId] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -50,6 +56,10 @@ function StudioView() {
         cdp_port: cdpPort ? parseInt(cdpPort) : null,
         username: username || null,
         analysis_options: !skipAnalysis ? { thoroughness } : null,
+        // Parallelization options
+        studio_workers: studioWorkers,
+        download_workers: skipDownload ? null : downloadWorkers,
+        request_delay_ms: requestDelay,
       };
 
       const result = await api.startStudio(request);
@@ -216,6 +226,71 @@ function StudioView() {
             )}
           </div>
 
+          {/* Advanced Options */}
+          <div className="collapsible-section">
+            <div
+              className="collapsible-header"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+            >
+              <span>Advanced Options</span>
+              <span>{showAdvanced ? '−' : '+'}</span>
+            </div>
+
+            {showAdvanced && (
+              <div className="collapsible-content">
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="studioWorkers">Screenshot Workers (1-4)</label>
+                    <input
+                      id="studioWorkers"
+                      type="number"
+                      min="1"
+                      max="4"
+                      value={studioWorkers}
+                      onChange={(e) => setStudioWorkers(parseInt(e.target.value) || 2)}
+                      disabled={isRunning}
+                    />
+                    <div className="form-help">
+                      Parallel browser pages for capturing screenshots
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="downloadWorkers">Download Workers (1-8)</label>
+                    <input
+                      id="downloadWorkers"
+                      type="number"
+                      min="1"
+                      max="8"
+                      value={downloadWorkers}
+                      onChange={(e) => setDownloadWorkers(parseInt(e.target.value) || 4)}
+                      disabled={isRunning || skipDownload}
+                    />
+                    <div className="form-help">
+                      Concurrent video downloads
+                    </div>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="requestDelay">Request Delay (ms)</label>
+                  <input
+                    id="requestDelay"
+                    type="number"
+                    min="500"
+                    max="5000"
+                    step="100"
+                    value={requestDelay}
+                    onChange={(e) => setRequestDelay(parseInt(e.target.value) || 1500)}
+                    disabled={isRunning}
+                  />
+                  <div className="form-help">
+                    Delay between requests to avoid TikTok rate limiting (500-5000ms)
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Error Display */}
           {error && <div className="error-message">{error}</div>}
 
@@ -306,7 +381,17 @@ function StudioView() {
               <span>Processed: {progress?.completed || 0}</span>
               <span>Downloaded: {progress?.downloaded || 0}</span>
               <span>Analyzed: {progress?.analyzed || 0}</span>
+              {progress?.workers_active !== undefined && (
+                <span>Workers: {progress.workers_active}/{studioWorkers}</span>
+              )}
             </div>
+
+            {progress?.current_videos && progress.current_videos.length > 0 && (
+              <div className="current-videos-info" style={{ fontSize: '0.85em', color: '#666', marginTop: '0.5em' }}>
+                Processing: {progress.current_videos.slice(0, 3).join(', ')}
+                {progress.current_videos.length > 3 && ` +${progress.current_videos.length - 3} more`}
+              </div>
+            )}
 
             <h4 className="mt-4 mb-2">Activity Log</h4>
             <ProgressLog logs={logs} maxHeight={250} />

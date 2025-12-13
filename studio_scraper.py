@@ -55,7 +55,18 @@ class TikTokStudioScraper:
     - Incremental processing (skips already processed videos)
     """
 
-    def __init__(self, output_dir: str, logger, browser_type: str = "chromium", cdp_port: int = None, username: str = None):
+    def __init__(
+        self,
+        output_dir: str,
+        logger,
+        browser_type: str = "chromium",
+        cdp_port: int = None,
+        username: str = None,
+        # Parallelization options
+        num_workers: int = 1,
+        request_delay_ms: int = 1500,
+        download_workers: int = 4,
+    ):
         """
         Initialize the Studio scraper.
 
@@ -65,6 +76,9 @@ class TikTokStudioScraper:
             browser_type: Playwright browser type (chromium, firefox, webkit)
             cdp_port: Custom CDP port for connecting to existing browser
             username: TikTok username for constructing video URLs
+            num_workers: Number of parallel browser pages for screenshots (1-4)
+            request_delay_ms: Delay between requests to avoid rate limiting
+            download_workers: Number of concurrent downloads
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -74,10 +88,19 @@ class TikTokStudioScraper:
         self.cdp_port = cdp_port
         self.account_username = username  # Used for constructing video URLs
 
+        # Parallelization config
+        self.num_workers = min(max(1, num_workers), 4)  # Cap at 4 workers
+        self.request_delay = request_delay_ms / 1000.0  # Convert to seconds
+        self.download_workers = min(max(1, download_workers), 8)  # Cap at 8
+
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.playwright = None
+
+        # Worker pages for parallel processing
+        self._worker_pages: list = []
+        self._rate_limiter: Optional[asyncio.Semaphore] = None
 
         self._is_logged_in = False
         self._processed_videos = set()
@@ -874,6 +897,477 @@ class TikTokStudioScraper:
             else:
                 # Re-raise other exceptions
                 raise
+
+    async def _create_worker_pages(self) -> None:
+        """
+        Create additional browser pages for parallel processing.
+        All pages share the same context (and thus cookies/authentication).
+        """
+        if not self.context:
+            raise RuntimeError("Browser context not initialized. Call initialize() first.")
+
+        # Main page is always the first worker
+        self._worker_pages = [self.page]
+
+        # Create additional pages if num_workers > 1
+        for i in range(1, self.num_workers):
+            try:
+                page = await self.context.new_page()
+                await page.set_viewport_size({"width": 1920, "height": 1080})
+                self._worker_pages.append(page)
+                self.logger.info(f"Created worker page {i + 1}/{self.num_workers}")
+            except Exception as e:
+                self.logger.warning(f"Failed to create worker page {i + 1}: {e}")
+                break
+
+        self.logger.info(f"Initialized {len(self._worker_pages)} worker page(s)")
+
+    async def _close_worker_pages(self) -> None:
+        """Close all worker pages except the main page."""
+        for i, page in enumerate(self._worker_pages[1:], start=1):
+            try:
+                await page.close()
+                self.logger.debug(f"Closed worker page {i}")
+            except Exception as e:
+                self.logger.warning(f"Error closing worker page {i}: {e}")
+        self._worker_pages = [self.page] if self.page else []
+
+    async def scrape_all_videos_parallel(
+        self,
+        video_scraper=None,
+        analyzer=None,
+        skip_download: bool = False,
+        skip_analysis: bool = False,
+        progress_callback=None,
+    ) -> dict:
+        """
+        Scrape all videos from TikTok Studio using parallel browser pages.
+
+        Videos are processed concurrently using multiple browser pages for
+        screenshot capture. Downloads are also parallelized separately.
+
+        Args:
+            video_scraper: TikTokScraper instance for downloading videos
+            analyzer: VideoAnalyzer instance for analyzing videos
+            skip_download: If True, don't download videos
+            skip_analysis: If True, don't analyze videos
+            progress_callback: Async callback for progress updates
+
+        Returns:
+            Dictionary with results summary
+        """
+        results = {
+            "total": 0,
+            "processed": 0,
+            "downloaded": 0,
+            "analyzed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "videos": [],
+            "errors": [],
+        }
+
+        # Fall back to sequential if only 1 worker
+        if self.num_workers <= 1:
+            return await self.scrape_all_videos(
+                video_scraper=video_scraper,
+                analyzer=analyzer,
+                skip_download=skip_download,
+                skip_analysis=skip_analysis,
+            )
+
+        self.logger.info(f"Starting parallel scrape with {self.num_workers} workers...")
+
+        try:
+            # Create worker pages
+            await self._create_worker_pages()
+
+            # Initialize rate limiter
+            self._rate_limiter = asyncio.Semaphore(self.num_workers)
+
+            # Navigate if needed
+            if self._connected_to_existing:
+                self.logger.info("Using current page from CDP connection")
+                await asyncio.sleep(1)
+            else:
+                await self.page.goto(STUDIO_HOME_URL, wait_until="networkidle", timeout=30000)
+                await asyncio.sleep(3)
+
+            # Collect all videos first (needed for total count and parallel processing)
+            self.logger.info("Collecting video list...")
+            all_videos = []
+            async for video_batch in self._get_video_list_batched(batch_size=50):
+                all_videos.extend(video_batch)
+                if progress_callback:
+                    await progress_callback("videos_discovered", {
+                        "count": len(all_videos),
+                    })
+
+            results["total"] = len(all_videos)
+            self.logger.info(f"Found {len(all_videos)} videos to process")
+
+            if progress_callback:
+                await progress_callback("job_started", {
+                    "total": len(all_videos),
+                    "workers": len(self._worker_pages),
+                })
+
+            if not all_videos:
+                self.logger.warning("No videos found in TikTok Studio")
+                return results
+
+            # Track active workers for progress
+            active_workers = set()
+            current_videos = []
+
+            # Process videos in parallel
+            async def process_video_task(idx: int, video_info: dict) -> dict:
+                """Process a single video with rate limiting."""
+                video_id = video_info.get("video_id", f"unknown_{idx}")
+
+                # Check if already processed
+                if self._is_video_processed(video_id):
+                    return {"skipped": True, "video_id": video_id}
+
+                async with self._rate_limiter:
+                    # Assign to worker page (round-robin)
+                    worker_idx = idx % len(self._worker_pages)
+                    page = self._worker_pages[worker_idx]
+
+                    # Track active worker
+                    active_workers.add(worker_idx)
+                    current_videos.append(video_id)
+
+                    try:
+                        # Staggered delay to avoid rate limiting
+                        delay = self.request_delay * (idx % self.num_workers)
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+
+                        self.logger.info(f"[Worker {worker_idx + 1}] Processing: {video_id}")
+
+                        # Process video on assigned page
+                        result = await self._process_single_video_on_page(
+                            page,
+                            video_info,
+                            video_scraper=video_scraper if not skip_download else None,
+                        )
+
+                        return result
+
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        # Check for rate limiting
+                        if "429" in str(e) or "rate limit" in error_msg:
+                            self.logger.warning(f"Rate limited on {video_id}, backing off...")
+                            await asyncio.sleep(5.0)
+                            # Retry once
+                            try:
+                                return await self._process_single_video_on_page(
+                                    page, video_info,
+                                    video_scraper=video_scraper if not skip_download else None,
+                                )
+                            except Exception as retry_e:
+                                return {"success": False, "video_id": video_id, "error": str(retry_e)}
+                        return {"success": False, "video_id": video_id, "error": str(e)}
+
+                    finally:
+                        active_workers.discard(worker_idx)
+                        if video_id in current_videos:
+                            current_videos.remove(video_id)
+
+            # Create tasks for all videos
+            tasks = [
+                asyncio.create_task(process_video_task(idx, video_info))
+                for idx, video_info in enumerate(all_videos)
+            ]
+
+            # Process results as they complete
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    video_result = await coro
+
+                    if video_result.get("skipped"):
+                        results["skipped"] += 1
+                    elif video_result.get("success"):
+                        results["processed"] += 1
+                        results["videos"].append(video_result)
+
+                        if video_result.get("downloaded"):
+                            results["downloaded"] += 1
+
+                            # Run analysis if enabled
+                            if analyzer and not skip_analysis and video_result.get("video_path"):
+                                try:
+                                    analysis_result = analyzer.analyze_video(video_result["video_path"])
+                                    if analysis_result and not analysis_result.errors:
+                                        json_path = video_result.get("json_path")
+                                        if json_path:
+                                            analyzer.update_metadata_file(json_path, analysis_result)
+                                        results["analyzed"] += 1
+                                except Exception as e:
+                                    self.logger.error(f"Analysis failed: {e}")
+                    else:
+                        results["failed"] += 1
+                        results["errors"].append({
+                            "video_id": video_result.get("video_id", "unknown"),
+                            "error": video_result.get("error", "Unknown error")
+                        })
+
+                    # Report progress
+                    if progress_callback:
+                        completed = results["processed"] + results["failed"] + results["skipped"]
+                        await progress_callback("job_progress", {
+                            "completed": completed,
+                            "total": results["total"],
+                            "progress": completed / results["total"] if results["total"] > 0 else 0,
+                            "processed": results["processed"],
+                            "downloaded": results["downloaded"],
+                            "analyzed": results["analyzed"],
+                            "failed": results["failed"],
+                            "workers_active": len(active_workers),
+                            "current_videos": list(current_videos)[:4],
+                        })
+
+                except Exception as e:
+                    results["failed"] += 1
+                    results["errors"].append({"error": str(e)})
+                    self.logger.error(f"Task error: {e}")
+
+            return results
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(x in error_msg for x in ['target closed', 'disconnected', 'connection closed', 'browser closed']):
+                self.logger.error("Browser was closed by user")
+                results["error"] = "Browser closed by user"
+                results["interrupted"] = True
+                return results
+            raise
+
+        finally:
+            # Clean up worker pages
+            await self._close_worker_pages()
+
+    async def _process_single_video_on_page(
+        self,
+        page,
+        video_info: dict,
+        video_scraper=None,
+    ) -> dict:
+        """
+        Process a single video using a specific page.
+        This is the parallelized version of _process_single_video.
+
+        Args:
+            page: Playwright page to use for this video
+            video_info: Dictionary with video_id and analytics_url
+            video_scraper: Optional TikTokScraper instance for downloading
+
+        Returns:
+            Result dictionary with success status and data
+        """
+        result = {
+            "success": False,
+            "video_id": video_info["video_id"],
+            "video_url": None,
+            "screenshots": {},
+            "metadata": {},
+            "downloaded": False,
+            "video_path": None,
+            "json_path": None,
+        }
+
+        try:
+            video_id = video_info["video_id"]
+            analytics_url = video_info["analytics_url"]
+
+            # Navigate to video analytics page
+            self.logger.debug(f"  Navigating to analytics: {analytics_url}")
+            await page.goto(analytics_url, wait_until="networkidle", timeout=60000)
+            await asyncio.sleep(2)
+
+            # Extract metadata from page
+            metadata = await self._extract_video_metadata_from_page(page)
+            result["metadata"] = metadata
+
+            # Determine output folder
+            username = metadata.get("username")
+            if not username or username == "unknown_user":
+                username = self.account_username or "unknown_user"
+            username = normalize_username(username)
+
+            create_date = metadata.get("create_date", timestamp_to_date(None))
+            try:
+                datetime.strptime(create_date, "%Y-%m-%d")
+                year = int(create_date.split("-")[0])
+                if year < 2016 or year > 2030:
+                    raise ValueError("Invalid year")
+            except (ValueError, IndexError):
+                create_date = datetime.now().strftime("%Y-%m-%d")
+
+            output_folder = self.output_dir / username / create_date
+            ensure_directory(output_folder)
+
+            # Capture screenshots of all 3 tabs
+            screenshots = {}
+
+            # Tab 1: Overview
+            if not await self._verify_tab_switch_on_page(page, "overview"):
+                await self._click_tab_on_page(page, "overview")
+            overview_path = output_folder / f"{video_id}_overview.png"
+            await self._capture_tab_screenshot_on_page(page, "overview", overview_path)
+            screenshots["overview"] = str(overview_path)
+
+            # Tab 2: Viewers
+            if await self._click_tab_on_page(page, "viewers"):
+                viewers_path = output_folder / f"{video_id}_viewers.png"
+                await self._capture_tab_screenshot_on_page(page, "viewers", viewers_path)
+                screenshots["viewers"] = str(viewers_path)
+
+            # Tab 3: Engagement
+            if await self._click_tab_on_page(page, "engagement"):
+                engagement_path = output_folder / f"{video_id}_engagement.png"
+                await self._capture_tab_screenshot_on_page(page, "engagement", engagement_path)
+                screenshots["engagement"] = str(engagement_path)
+
+            result["screenshots"] = screenshots
+
+            # Extract video URL
+            video_url = await self._extract_video_url_on_page(page, video_id, username=username)
+            result["video_url"] = video_url
+
+            result["success"] = True
+            result["output_folder"] = str(output_folder)
+
+            # Download video if scraper provided
+            if video_scraper and video_url:
+                try:
+                    download_success, download_message = video_scraper.download_video(video_url)
+                    if download_success:
+                        result["downloaded"] = True
+                        video_path = output_folder / f"{video_id}.mp4"
+                        json_path = output_folder / f"{video_id}.json"
+                        if video_path.exists():
+                            result["video_path"] = str(video_path)
+                        if json_path.exists():
+                            result["json_path"] = str(json_path)
+                    else:
+                        result["download_error"] = download_message
+                except Exception as e:
+                    result["download_error"] = str(e)
+
+        except Exception as e:
+            result["error"] = str(e)
+            self.logger.error(f"  Error processing video: {e}")
+
+        return result
+
+    async def _extract_video_metadata_from_page(self, page) -> dict:
+        """Extract video metadata from a specific page."""
+        metadata = {}
+        try:
+            username_selectors = [
+                '[class*="username"]',
+                '[class*="author"]',
+                '[class*="creator"]',
+                'a[href*="/@"]',
+            ]
+
+            for selector in username_selectors:
+                try:
+                    element = await page.query_selector(selector)
+                    if element:
+                        text = await element.inner_text()
+                        if text and text.startswith("@"):
+                            metadata["username"] = text[1:]
+                            break
+                        elif text:
+                            metadata["username"] = text
+                            break
+                except:
+                    continue
+
+            date_pattern = r'(\d{1,2})\.(\d{1,2})\.(\d{4})'
+            page_content = await page.content()
+            date_match = re.search(date_pattern, page_content)
+            if date_match:
+                day, month, year = date_match.groups()
+                metadata["create_date"] = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+
+        except Exception as e:
+            self.logger.debug(f"Error extracting metadata: {e}")
+
+        return metadata
+
+    async def _verify_tab_switch_on_page(self, page, tab_name: str) -> bool:
+        """Verify tab switch on a specific page."""
+        try:
+            hebrew_name = TAB_NAMES.get(tab_name, tab_name)
+            active_tab = await page.query_selector('[class*="active"][role="tab"], [aria-selected="true"]')
+            if active_tab:
+                text = await active_tab.inner_text()
+                return hebrew_name in text or tab_name.lower() in text.lower()
+        except:
+            pass
+        return False
+
+    async def _click_tab_on_page(self, page, tab_name: str) -> bool:
+        """Click a tab on a specific page."""
+        try:
+            hebrew_name = TAB_NAMES.get(tab_name, tab_name)
+
+            # Try various selectors
+            selectors = [
+                f'[role="tab"]:has-text("{hebrew_name}")',
+                f'button:has-text("{hebrew_name}")',
+                f'[class*="tab"]:has-text("{hebrew_name}")',
+            ]
+
+            for selector in selectors:
+                try:
+                    tab = await page.query_selector(selector)
+                    if tab:
+                        await tab.click()
+                        await asyncio.sleep(2)
+                        return True
+                except:
+                    continue
+
+        except Exception as e:
+            self.logger.debug(f"Error clicking tab {tab_name}: {e}")
+
+        return False
+
+    async def _capture_tab_screenshot_on_page(self, page, tab_name: str, output_path) -> bool:
+        """Capture screenshot of current tab on a specific page."""
+        try:
+            await page.screenshot(path=str(output_path), full_page=False)
+            return True
+        except Exception as e:
+            self.logger.error(f"Screenshot failed for {tab_name}: {e}")
+            return False
+
+    async def _extract_video_url_on_page(self, page, video_id: str, username: str = None) -> Optional[str]:
+        """Extract video URL from a specific page."""
+        # Construct URL from video_id if username known
+        if username:
+            return f"https://www.tiktok.com/@{username}/video/{video_id}"
+
+        # Try to extract from page
+        try:
+            # Look for video thumbnail or link
+            video_link = await page.query_selector(f'a[href*="/video/{video_id}"]')
+            if video_link:
+                href = await video_link.get_attribute("href")
+                if href:
+                    if href.startswith("/"):
+                        return f"https://www.tiktok.com{href}"
+                    return href
+        except Exception as e:
+            self.logger.debug(f"Error extracting video URL: {e}")
+
+        return None
 
     async def _get_cookies_for_api(self) -> dict:
         """

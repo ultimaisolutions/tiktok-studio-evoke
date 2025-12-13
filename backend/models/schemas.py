@@ -84,6 +84,10 @@ class StudioRequest(BaseModel):
     username: Optional[str] = Field(None, description="TikTok username")
     cookie_browser: BrowserType = Field(BrowserType.chrome, description="Browser for cookie extraction")
     analysis_options: Optional[AnalysisOptions] = Field(None, description="Analysis configuration")
+    # Parallelization options
+    studio_workers: Optional[int] = Field(2, ge=1, le=4, description="Parallel browser pages for screenshots")
+    download_workers: Optional[int] = Field(4, ge=1, le=8, description="Concurrent video downloads")
+    request_delay_ms: Optional[int] = Field(1500, ge=500, le=5000, description="Delay between requests (ms)")
 
 
 class AnalysisRequest(BaseModel):
