@@ -4,18 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TikTok video scraper and analyzer with **React UI** and **TikTok Studio automation**.
+TikTok video scraper and analyzer with **React UI** and **TikTok Studio automation**. Includes API pattern extraction for resilient scraping.
 
 ## Quick Start
 
 ### UI Mode (Recommended)
 
 ```bash
-# Install all dependencies (Node.js + Python)
-npm run setup
-
-# Start all services
-npm run dev
+npm run setup    # Install all dependencies
+npm run dev      # Start all services
 ```
 
 Opens at http://localhost:5173
@@ -23,14 +20,11 @@ Opens at http://localhost:5173
 ### CLI Mode
 
 ```bash
-# Setup
 python -m venv .venv && .venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 playwright install
 
-# Run
 python main.py --studio          # TikTok Studio mode
-python main.py                   # Download from urls.txt
 python main.py --analyze-only    # Analyze existing videos
 ```
 
@@ -38,87 +32,97 @@ python main.py --analyze-only    # Analyze existing videos
 
 ```
 tiktok-studio-evoke/
-├── backend/                 # FastAPI backend
-│   ├── main.py              # App entry point (port 8000)
+├── backend/                 # FastAPI backend (port 8000)
+│   ├── main.py              # App entry point
 │   ├── models/schemas.py    # Pydantic models
-│   ├── routes/              # API endpoints
+│   ├── routes/
 │   │   ├── scraper.py       # POST /api/scraper/download
 │   │   ├── studio.py        # POST /api/studio/start
 │   │   ├── analysis.py      # POST /api/analysis/start
 │   │   ├── videos.py        # GET /api/videos
+│   │   ├── api_extraction.py # POST /api/extractor/start
 │   │   └── websocket.py     # WS /ws/{job_id}
-│   ├── services/            # Business logic wrappers
-│   └── utils/               # WebSocket progress manager
-├── server/                  # Express proxy (port 3001)
-│   └── index.js
+│   └── services/
+│       ├── studio_service.py
+│       └── api_extraction_service.py
 ├── client/                  # React + Vite (port 5173)
-│   └── src/
-│       ├── components/Views/  # DownloadView, StudioView, etc.
-│       └── hooks/           # useWebSocket, useApi
+│   └── src/components/Views/
+│       ├── DownloadView.jsx
+│       ├── StudioView.jsx
+│       ├── AnalysisView.jsx
+│       ├── VideosView.jsx
+│       └── APIExtractionView.jsx
 ├── main.py                  # CLI entry point
 ├── studio_scraper.py        # TikTok Studio Playwright automation
+├── api_extractor.py         # API pattern extraction via network interception
 ├── scraper.py               # Video download via pyktok
 ├── analyzer.py              # Video analysis with multiprocessing
-├── analysis_models.py       # ML models (MediaPipe/YOLO/Haar)
-├── tiktok_studio_ocr.py     # OCR via Google Vision API
-├── package.json             # Root scripts (npm run dev)
-└── requirements.txt         # Python dependencies
+└── api_patterns.json        # Extracted API patterns (auto-generated)
 ```
 
-## Key Commands
+## Key Classes
 
-### npm Scripts (Root)
+**Backend Services:**
+- `StudioService` - TikTok Studio scraping with browser-based API fetch
+- `APIExtractionService` - Network interception to capture API patterns
+- `ScraperService` - Video download job management
+- `AnalysisService` - Batch video analysis
+- `ProgressManager` - WebSocket broadcast manager
 
-```bash
-npm run dev          # Start all 3 services (Vite + Express + FastAPI)
-npm run setup        # Install all dependencies
-npm run dev:client   # Start React only
-npm run dev:server   # Start Express only
-npm run dev:api      # Start FastAPI only
-```
-
-### CLI Commands
-
-```bash
-# TikTok Studio
-python main.py --studio
-python main.py --studio --skip-download    # Screenshots only
-python main.py --studio --skip-analysis
-
-# Standard download
-python main.py -i urls.txt -o videos/
-python main.py -b firefox --analyze
-
-# Analysis only
-python main.py --analyze-only --thoroughness extreme
-```
+**Python Core:**
+- `TikTokStudioScraper` - Playwright automation, uses `page.evaluate()` for API calls
+- `TikTokAPIExtractor` - Captures XHR/Fetch traffic, extracts endpoint patterns
+- `VideoAnalyzer` - Multiprocessing video analysis
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/scraper/download` | Start download job |
-| GET | `/api/scraper/status/{job_id}` | Get job status |
 | POST | `/api/studio/start` | Start Studio session |
 | POST | `/api/studio/continue/{id}` | Continue after login |
+| POST | `/api/extractor/start` | Start API extraction |
+| GET | `/api/extractor/patterns` | Get saved patterns |
+| POST | `/api/extractor/apply` | Apply patterns to scraper |
+| POST | `/api/scraper/download` | Start download job |
 | POST | `/api/analysis/start` | Start batch analysis |
 | GET | `/api/videos` | List downloaded videos |
-| GET | `/api/videos/{id}` | Get video details |
 | WS | `/ws/{job_id}` | Real-time progress |
 
-## Key Classes
+## Recent Changes (Dec 2024)
 
-**Backend Services:**
-- `ScraperService` - Wraps TikTokScraper with async job management
-- `StudioService` - Wraps TikTokStudioScraper, handles login flow
-- `AnalysisService` - Wraps VideoAnalyzer with progress callbacks
-- `ProgressManager` - WebSocket broadcast manager
+### API Extraction Feature
+- New "API Extract" tab in UI captures TikTok Studio API patterns
+- Network interception via Playwright `page.on("request/response")`
+- Extracts endpoints, headers, params, response schemas
+- Saved to `api_patterns.json` for scraper to use
 
-**Python Core:**
-- `TikTokStudioScraper` - Playwright automation for Studio
-- `TikTokScraper` - Video download via pyktok
-- `VideoAnalyzer` - Batch analysis with multiprocessing
-- `AnalysisModels` - Singleton ML model management
+### Browser-Based API Fetch
+- `_fetch_video_list_via_browser()` uses `page.evaluate()` with fetch
+- Solves security token (X-Bogus) expiration issue
+- Browser generates fresh tokens automatically
+- Falls back to `requests` library if browser fetch fails
+
+### Key Implementation Details
+
+**API calls through browser context:**
+```python
+result = await self.page.evaluate('''
+    async (args) => {
+        const response = await fetch(args.endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(args.body),
+            credentials: 'include'
+        });
+        return await response.json();
+    }
+''', {"endpoint": endpoint, "body": request_body})
+```
+
+**Pattern loading in scraper:**
+```python
+self._api_patterns = self._load_api_patterns()  # From api_patterns.json
+```
 
 ## Analysis Presets
 
@@ -134,7 +138,6 @@ python main.py --analyze-only --thoroughness extreme
 
 ```
 videos/
-├── studio_urls_{timestamp}.txt
 └── {username}/{date}/
     ├── {video_id}.mp4
     ├── {video_id}.json
@@ -143,27 +146,9 @@ videos/
     └── {video_id}_engagement.png
 ```
 
-## Dependencies
-
-**Python:** pyktok, playwright, fastapi, uvicorn, opencv-python-headless, moviepy, ultralytics
-
-**Node.js:** react, vite, express, http-proxy-middleware, concurrently
-
-## OCR Configuration (Google Cloud Vision API)
-
-Set the environment variable for OCR:
-
-```bash
-# Windows (PowerShell)
-$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\credentials.json"
-
-# Linux/macOS
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
-```
-
 ## Known Issues
 
-- Browser cookies: Close browser before extraction, or use `--no-browser`
-- MediaPipe: Requires Python <3.13, falls back to Haar cascades
-- Studio mode: May require manual login if cookies not found
-- WebSocket: Reconnects automatically on disconnect
+- TikTok Studio never reaches "networkidle" - use `wait_until="domcontentloaded"`
+- Security tokens (X-Bogus) expire quickly - use browser-based fetch
+- MediaPipe requires Python <3.13, falls back to Haar cascades
+- Studio mode may require manual login if cookies not found

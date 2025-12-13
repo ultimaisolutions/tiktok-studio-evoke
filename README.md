@@ -1,161 +1,127 @@
 # TikTok Studio Extractor
 
-A tool for automating TikTok Studio analytics extraction, downloading videos, and performing video analysis — with a **React UI** or CLI.
+An educational tool for understanding TikTok's Creator Studio, video analysis techniques, and browser automation patterns. Built with React, FastAPI, and Playwright.
 
-## Quick Start (UI)
-
-```bash
-# Install all dependencies (Node.js + Python + Playwright browsers)
-npm run setup
-
-# Start the app (React + Express + FastAPI)
-npm run dev
-```
-
-Open http://localhost:5173 in your browser.
-
-> **Note**: `npm run setup` automatically installs Playwright's Chromium browser for Studio automation.
-
-## Quick Start (CLI)
-
-```bash
-# Setup
-python -m venv .venv && .venv\Scripts\activate  # Windows
-python -m venv .venv && source .venv/bin/activate  # macOS/Linux
-pip install -r requirements.txt
-playwright install
-
-# Download videos from urls.txt
-python main.py
-
-# TikTok Studio mode (screenshots + download + analyze)
-python main.py --studio
-
-# Analyze existing videos
-python main.py --analyze-only
-```
+> **Educational Use**: This project demonstrates web scraping techniques, API pattern extraction, video analysis pipelines, and browser automation for learning purposes.
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| **Web UI** | React interface for all operations with real-time progress |
-| **Studio Mode** | Automate TikTok Studio screenshot capture for analytics |
-| **Video Download** | Download videos with metadata from URLs |
-| **Video Analysis** | Visual metrics, face/person detection, motion, color, audio |
-| **OCR Extraction** | Extract analytics data from screenshots via Google Vision API |
+- **TikTok Studio Automation** - Playwright-based browser automation for Creator Studio
+- **API Pattern Extraction** - Network interception to capture and analyze API structures
+- **Video Analysis** - Computer vision analysis (faces, objects, motion, colors, audio)
+- **React Web UI** - Modern interface with real-time WebSocket progress updates
 
-## UI Overview
+## Quick Start
 
-The web UI provides four main views:
-
-- **Download**: Paste URLs, configure browser/analysis options
-- **Studio**: TikTok Studio automation with manual login support
-- **Analysis**: Batch analyze existing videos with preset options
-- **Videos**: Browse downloaded videos with metadata and analysis results
-
-All operations show real-time progress via WebSocket.
-
-## CLI Commands
-
-### TikTok Studio Mode
+### Web UI (Recommended)
 
 ```bash
-python main.py --studio                    # Full pipeline
-python main.py --studio --skip-download    # Screenshots only
-python main.py --studio --skip-analysis    # Download without analysis
-python main.py --studio --studio-browser firefox
+npm run setup    # Install Python + Node.js dependencies + Playwright browsers
+npm run dev      # Start all services (React + Express + FastAPI)
 ```
 
-### Standard Download
+Open http://localhost:5173
+
+### CLI
 
 ```bash
-python main.py                             # Download from urls.txt
-python main.py -i urls.txt -o videos/      # Custom input/output
-python main.py -b firefox                  # Use Firefox cookies
-python main.py --no-browser                # Public videos only
+# Setup
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # macOS/Linux
+pip install -r requirements.txt
+playwright install
+
+# Run
+python main.py --studio       # TikTok Studio mode
+python main.py --analyze-only # Analyze existing videos
 ```
 
-### Video Analysis
+## CLI Reference
+
+### Basic Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-i, --input` | `urls.txt` | Input file with TikTok URLs |
+| `-o, --output` | `videos` | Output directory |
+| `-b, --browser` | `chrome` | Browser for cookies (chrome/firefox/edge/opera/brave/chromium) |
+| `-l, --log` | `errors.log` | Error log file |
+| `--no-browser` | - | Skip browser cookies (public videos only) |
+
+### TikTok Studio Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--studio` | - | Enable Studio mode (screenshots + download + analyze) |
+| `--studio-browser` | `chromium` | Browser for automation (chromium/firefox/webkit) |
+| `--skip-download` | - | Only capture screenshots |
+| `--skip-analysis` | - | Download without analysis |
+| `--cdp-port` | auto | CDP port for existing browser (auto-scans 9222-9229) |
+| `--username` | - | TikTok username for video URLs |
+
+### Analysis Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--analyze` | - | Analyze videos after download |
+| `--analyze-only` | - | Only analyze existing videos |
+| `--thoroughness` | `balanced` | Preset: quick/balanced/thorough/maximum/extreme |
+| `--sample-percent` | - | Percentage of frames to sample (1-100) |
+| `--sample-frames` | - | Number of frames to sample (1-300) |
+| `--color-clusters` | - | K-means clusters for color analysis (3-20) |
+| `--motion-res` | - | Motion analysis resolution width (80-1080) |
+| `--face-model` | - | MediaPipe model: short (fast) / full (accurate) |
+| `--workers` | CPU-1 | Parallel analysis workers |
+| `--skip-audio` | - | Skip audio analysis |
+| `--scene-detection` | - | Enable scene/cut detection |
+| `--full-resolution` | - | Analyze at full resolution |
+
+### Examples
 
 ```bash
-python main.py --analyze                   # Download + analyze
-python main.py --analyze-only              # Analyze existing videos
-python main.py --analyze --thoroughness extreme
-python main.py --analyze --sample-percent 70
-```
+# TikTok Studio - full pipeline
+python main.py --studio
 
-### OCR (Analytics Screenshots)
+# Studio - screenshots only, no download
+python main.py --studio --skip-download
 
-```bash
-python tiktok_studio_ocr.py screenshot.png -o results.json
-python tiktok_studio_ocr.py overview.png viewers.png engagement.png -o analytics.json
+# Analyze existing videos with extreme quality
+python main.py --analyze-only --thoroughness extreme
+
+# Download from custom file with Firefox cookies
+python main.py -i my_urls.txt -b firefox
+
+# Fast analysis with 30% frame sampling
+python main.py --analyze-only --sample-percent 30 --thoroughness quick
 ```
 
 ## Analysis Presets
 
-| Preset | Frames | YOLO | Scene Detect | Use Case |
-|--------|--------|------|--------------|----------|
-| `quick` | 20% | No | No | Fast testing |
-| `balanced` | 40% | No | No | Default |
-| `thorough` | 60% | Yes | Yes | Detailed |
-| `maximum` | 70% | Yes | Yes | High quality |
-| `extreme` | 80% | Yes | Yes | Maximum detail |
-
-## Output Structure
-
-```
-videos/
-├── studio_urls_{timestamp}.txt     # Extracted URLs log
-└── {username}/{date}/
-    ├── {video_id}.mp4              # Video file
-    ├── {video_id}.json             # Metadata + analysis
-    ├── {video_id}_overview.png     # Studio Overview screenshot
-    ├── {video_id}_viewers.png      # Studio Viewers screenshot
-    └── {video_id}_engagement.png   # Studio Engagement screenshot
-```
+| Preset | Frames | YOLO | Scene Detection |
+|--------|--------|------|-----------------|
+| quick | 20% | No | No |
+| balanced | 40% | No | No |
+| thorough | 60% | Yes | Yes |
+| maximum | 70% | Yes | Yes |
+| extreme | 80% | Yes | Yes |
 
 ## Requirements
 
-- **Python** 3.8+ (fully compatible with 3.13 on Windows)
-- **Node.js** 18+ (for UI)
-- **Browsers**: Chrome, Firefox, Edge, Opera, Brave, Chromium
-
-> **Note**: MediaPipe requires Python < 3.13. On Python 3.13+, face detection falls back to Haar cascades automatically.
-
-### Google Cloud Vision (for OCR)
-
-1. Create project at [Google Cloud Console](https://console.cloud.google.com)
-2. Enable Cloud Vision API
-3. Create service account and download JSON key
-4. Set environment variable:
-   ```bash
-   export GOOGLE_APPLICATION_CREDENTIALS="/path/to/credentials.json"
-   ```
+- Python 3.8+ (3.13 compatible)
+- Node.js 18+
+- Chrome/Chromium (for Studio automation)
 
 ## Architecture
 
 ```
-├── backend/          # FastAPI REST API + WebSocket
-├── server/           # Express proxy
-├── client/           # React + Vite frontend
-├── main.py           # CLI entry point
-├── studio_scraper.py # TikTok Studio automation
-├── scraper.py        # Video downloader
-├── analyzer.py       # Video analysis
-└── tiktok_studio_ocr.py  # OCR extraction
+backend/            FastAPI REST API + WebSocket
+client/             React + Vite frontend
+main.py             CLI entry point
+studio_scraper.py   TikTok Studio automation
+api_extractor.py    API pattern extraction
+analyzer.py         Video analysis engine
 ```
-
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| Cookie extraction fails | Close browser, try `--no-browser`, or use different browser |
-| MediaPipe not available | Python 3.13+ falls back to Haar cascades automatically |
-| Vision API errors | Check `GOOGLE_APPLICATION_CREDENTIALS` and API quota |
-| Studio login required | Use manual login when prompted |
-| Browser not launching | Ensure Chrome is installed; Studio mode auto-launches Chrome with remote debugging |
-| WebSocket disconnects | Check that FastAPI is running on port 8000; UI auto-reconnects with backoff |
 
 ## License
 
