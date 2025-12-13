@@ -528,6 +528,11 @@ class TikTokAPIExtractor:
         """
         Navigate through Studio pages and extract API patterns.
 
+        New flow:
+        1. Navigate to /content page → capture video list API
+        2. Find video rows and click analytics buttons → capture analytics API
+        3. Done
+
         Args:
             sample_video_count: Number of video analytics pages to sample
             progress_callback: Optional callback for progress updates
@@ -555,36 +560,12 @@ class TikTokAPIExtractor:
             await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(4)  # Allow time for XHR requests to fire
 
-            # Step 2: Look for "צפייה בניתוח נתונים" button or equivalent
+            # Step 2: Click analytics buttons on video rows to capture analytics API
             if progress_callback:
-                await progress_callback("Looking for analytics button...", 0.2)
+                await progress_callback(f"Clicking analytics on {sample_video_count} videos...", 0.2)
 
-            self.logger.info("Step 2: Looking for analytics button...")
-            await self._click_analytics_button()
-            await asyncio.sleep(3)
-
-            # Step 3: Navigate to Studio home for sidebar with videos
-            if progress_callback:
-                await progress_callback("Navigating to Studio home...", 0.3)
-
-            self.logger.info("Step 3: Navigating to Studio home for sidebar...")
-            await self.page.goto(STUDIO_HOME_URL, wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(4)  # Allow time for XHR requests to fire
-
-            # Step 4: Scroll sidebar to trigger more API calls
-            if progress_callback:
-                await progress_callback("Scrolling sidebar to load more videos...", 0.4)
-
-            self.logger.info("Step 4: Scrolling sidebar...")
-            await self._scroll_sidebar()
-            await asyncio.sleep(3)
-
-            # Step 5: Click on video items to capture analytics APIs
-            if progress_callback:
-                await progress_callback(f"Sampling {sample_video_count} video analytics...", 0.5)
-
-            self.logger.info(f"Step 5: Sampling {sample_video_count} video analytics pages...")
-            await self._sample_video_analytics(sample_video_count, progress_callback)
+            self.logger.info(f"Step 2: Clicking analytics buttons on {sample_video_count} videos...")
+            await self._click_video_analytics_buttons(sample_video_count, progress_callback)
 
             # Compile results
             results["total_requests_captured"] = len(self._captured_requests)
@@ -610,91 +591,140 @@ class TikTokAPIExtractor:
 
         return results
 
-    async def _click_analytics_button(self):
-        """Try to click the analytics button (Hebrew: צפייה בניתוח נתונים)."""
-        selectors = [
-            'button:has-text("צפייה בניתוח נתונים")',
-            'button:has-text("View analytics")',
-            'button:has-text("Analytics")',
-            '[data-e2e*="analytics"]',
-            '[class*="analytics"]',
+    async def _click_video_analytics_buttons(self, count: int, progress_callback=None):
+        """
+        Click analytics buttons on video rows in the /content page.
+
+        On the /content page, each video row has a "צפייה בניתוח נתונים" (View Analytics) button.
+        This method finds video rows and clicks their analytics buttons to capture analytics API calls.
+
+        Args:
+            count: Number of videos to sample
+            progress_callback: Optional callback for progress updates
+        """
+        # Selectors for video rows on /content page (TikTok Studio uses a table layout)
+        row_selectors = [
+            'table tbody tr',  # Generic table rows
+            'tr[class*="TableRow"]',  # Table rows with TableRow class
+            '[data-e2e*="content-item"]',
+            '[class*="content-item"]',
+            '[class*="video-row"]',
+            'div[class*="ContentTable"] tr',  # Content table rows
         ]
 
-        for selector in selectors:
-            try:
-                element = await self.page.wait_for_selector(selector, timeout=2000)
-                if element:
-                    await element.click()
-                    self.logger.info(f"Clicked analytics button: {selector}")
-                    return True
-            except:
-                continue
-
-        self.logger.info("Could not find analytics button (may already be on analytics page)")
-        return False
-
-    async def _scroll_sidebar(self):
-        """Scroll the sidebar to load more video items."""
-        sidebar_selectors = [
-            '[class*="sidebar"]',
-            '[class*="video-list"]',
-            '[class*="VideoSelector"]',
-            '[data-e2e*="VideoSelect"]',
-        ]
-
-        for selector in sidebar_selectors:
-            try:
-                element = await self.page.query_selector(selector)
-                if element:
-                    # Scroll down several times
-                    for _ in range(3):
-                        await element.evaluate('el => el.scrollTop = el.scrollHeight')
-                        await asyncio.sleep(0.5)
-                    self.logger.info(f"Scrolled sidebar: {selector}")
-                    return
-            except:
-                continue
-
-        # Fallback: scroll the page
-        for _ in range(3):
-            await self.page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-            await asyncio.sleep(0.5)
-
-    async def _sample_video_analytics(self, count: int, progress_callback=None):
-        """Click on video items to capture analytics API calls."""
-        # Find video items in sidebar
-        video_selectors = [
-            'button img[data-tt="components_AnalyticsVideoSelector_Image"]',
-            '[class*="video-item"]',
-            '[class*="VideoCard"]',
-            '[data-e2e*="video"]',
-        ]
-
-        video_elements = []
-        for selector in video_selectors:
+        # Find video rows
+        rows = []
+        for selector in row_selectors:
             try:
                 elements = await self.page.query_selector_all(selector)
-                if elements:
-                    video_elements = elements[:count]
+                if elements and len(elements) > 0:
+                    # Skip header row if it's the first element
+                    if len(elements) > 1:
+                        rows = elements[1:count + 1]  # Skip first row (header), take up to count
+                    else:
+                        rows = elements[:count]
+                    self.logger.info(f"Found {len(elements)} rows with selector: {selector}")
                     break
-            except:
+            except Exception as e:
+                self.logger.debug(f"Selector {selector} failed: {e}")
                 continue
 
-        if not video_elements:
-            self.logger.warning("Could not find video elements to click")
+        if not rows:
+            self.logger.warning("Could not find video rows on /content page. Trying alternative approach...")
+            # Alternative: Try to find analytics buttons directly
+            await self._click_analytics_buttons_directly(count, progress_callback)
             return
 
-        for i, element in enumerate(video_elements):
+        self.logger.info(f"Processing {len(rows)} video rows...")
+
+        for i, row in enumerate(rows):
             try:
                 if progress_callback:
-                    progress = 0.5 + (0.4 * (i + 1) / len(video_elements))
-                    await progress_callback(f"Sampling video {i + 1}/{len(video_elements)}...", progress)
+                    progress = 0.2 + (0.7 * (i + 1) / len(rows))
+                    await progress_callback(f"Clicking analytics for video {i + 1}/{len(rows)}...", progress)
 
-                await element.click()
-                await asyncio.sleep(2)  # Wait for analytics API calls
-                self.logger.info(f"Clicked video {i + 1}/{len(video_elements)}")
+                # Find analytics button within this row
+                analytics_btn = None
+
+                # Try Hebrew text first
+                analytics_btn = await row.query_selector('button:has-text("צפייה בניתוח נתונים")')
+                if not analytics_btn:
+                    analytics_btn = await row.query_selector('text="צפייה בניתוח נתונים"')
+                if not analytics_btn:
+                    analytics_btn = await row.query_selector('button:has-text("View analytics")')
+                if not analytics_btn:
+                    analytics_btn = await row.query_selector('[data-e2e*="analytics"]')
+                if not analytics_btn:
+                    # Try any button with "analytics" in class
+                    analytics_btn = await row.query_selector('button[class*="analytics"]')
+                if not analytics_btn:
+                    # Last resort: look for any clickable element that might be analytics
+                    analytics_btn = await row.query_selector('a[href*="analytics"]')
+
+                if analytics_btn:
+                    await analytics_btn.click()
+                    self.logger.info(f"Clicked analytics button for video {i + 1}")
+                    await asyncio.sleep(4)  # Wait for analytics page to load and API calls
+
+                    # Navigate back to content page for next video
+                    await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
+                    await asyncio.sleep(3)
+                else:
+                    self.logger.warning(f"Could not find analytics button in video row {i + 1}")
+
             except Exception as e:
-                self.logger.warning(f"Failed to click video {i + 1}: {e}")
+                self.logger.warning(f"Failed to click analytics for video {i + 1}: {e}")
+                # Try to navigate back to content page even on error
+                try:
+                    await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
+                    await asyncio.sleep(2)
+                except:
+                    pass
+
+    async def _click_analytics_buttons_directly(self, count: int, progress_callback=None):
+        """
+        Fallback method: Try to find and click analytics buttons directly on the page.
+
+        This is used when we can't find video rows but might still find analytics buttons.
+        """
+        self.logger.info("Trying to find analytics buttons directly...")
+
+        # Try to find all analytics buttons/links on the page
+        button_selectors = [
+            'button:has-text("צפייה בניתוח נתונים")',
+            'button:has-text("View analytics")',
+            'a[href*="/analytics/"]',
+            '[data-e2e*="analytics-button"]',
+        ]
+
+        for selector in button_selectors:
+            try:
+                buttons = await self.page.query_selector_all(selector)
+                if buttons and len(buttons) > 0:
+                    self.logger.info(f"Found {len(buttons)} analytics buttons with selector: {selector}")
+
+                    for i, btn in enumerate(buttons[:count]):
+                        try:
+                            if progress_callback:
+                                progress = 0.2 + (0.7 * (i + 1) / min(len(buttons), count))
+                                await progress_callback(f"Clicking analytics button {i + 1}...", progress)
+
+                            await btn.click()
+                            self.logger.info(f"Clicked analytics button {i + 1}")
+                            await asyncio.sleep(4)
+
+                            # Navigate back
+                            await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
+                            await asyncio.sleep(3)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to click button {i + 1}: {e}")
+
+                    return
+            except Exception as e:
+                self.logger.debug(f"Selector {selector} failed: {e}")
+                continue
+
+        self.logger.warning("Could not find any analytics buttons on the page")
 
     def save_patterns(self, file_path: Path = None) -> bool:
         """Save extracted patterns to JSON file."""
