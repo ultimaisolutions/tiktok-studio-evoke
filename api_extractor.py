@@ -596,7 +596,7 @@ class TikTokAPIExtractor:
         Click analytics buttons on video rows in the /content page.
 
         On the /content page, each video row has a "צפייה בניתוח נתונים" (View Analytics) button.
-        This method uses Playwright's locator API (not query_selector) for text-based matching.
+        Based on DevTools inspection, this is actually a <div> with data-icon="ChartRise", NOT a button.
 
         Args:
             count: Number of videos to sample
@@ -604,22 +604,25 @@ class TikTokAPIExtractor:
         """
         self.logger.info("Looking for analytics buttons on /content page...")
 
-        # Use Playwright locator API for text-based matching
-        # Try Hebrew text first, then English
-        button_texts = ["צפייה בניתוח נתונים", "View analytics", "Analytics"]
-
         clicked = 0
-        for text in button_texts:
+
+        # FIRST: Try the known selector based on DevTools inspection
+        # The analytics "button" is actually a <div> with a ChartRise icon
+        primary_selectors = [
+            '[data-icon="ChartRise"]',                    # The chart icon itself (most reliable)
+            '[data-testid="ChartRise"]',                  # TestID attribute
+        ]
+
+        for selector in primary_selectors:
             if clicked >= count:
                 break
 
             try:
-                # Use locator API which supports :has-text() (not query_selector!)
-                buttons = self.page.locator(f'button:has-text("{text}")')
+                buttons = self.page.locator(selector)
                 button_count = await buttons.count()
 
                 if button_count > 0:
-                    self.logger.info(f"Found {button_count} buttons with text '{text}'")
+                    self.logger.info(f"Found {button_count} analytics icons with selector '{selector}'")
 
                     for i in range(min(button_count, count - clicked)):
                         try:
@@ -627,32 +630,74 @@ class TikTokAPIExtractor:
                                 progress = 0.2 + (0.7 * (clicked + 1) / count)
                                 await progress_callback(f"Clicking analytics {clicked + 1}/{count}...", progress)
 
-                            # Click the button using locator
+                            # Click the icon
                             await buttons.nth(i).click()
-                            self.logger.info(f"Clicked analytics button {clicked + 1}")
+                            self.logger.info(f"Clicked analytics icon {clicked + 1}")
                             clicked += 1
 
-                            await asyncio.sleep(4)  # Wait for analytics page
+                            await asyncio.sleep(4)  # Wait for analytics page to load
 
-                            # Navigate back for next button
+                            # Navigate back for next icon
                             await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
                             await asyncio.sleep(3)
 
-                            # Re-fetch buttons after navigation (DOM has changed)
-                            buttons = self.page.locator(f'button:has-text("{text}")')
+                            # Re-fetch icons after navigation (DOM has changed)
+                            buttons = self.page.locator(selector)
 
                         except Exception as e:
-                            self.logger.warning(f"Failed to click button {i}: {e}")
+                            self.logger.warning(f"Failed to click icon {i}: {e}")
+
+                    if clicked > 0:
+                        break  # Found and clicked at least one, don't try other selectors
 
             except Exception as e:
-                self.logger.debug(f"Text '{text}' search failed: {e}")
+                self.logger.debug(f"Selector '{selector}' failed: {e}")
 
-        # If no buttons found with text, try CSS selectors for data attributes
+        # FALLBACK: Try text-based matching (in case UI changes back to button)
         if clicked == 0:
-            self.logger.info("No text-based buttons found, trying data attribute selectors...")
+            self.logger.info("No ChartRise icons found, trying text-based button search...")
+            button_texts = ["צפייה בניתוח נתונים", "View analytics", "Analytics"]
+
+            for text in button_texts:
+                if clicked >= count:
+                    break
+
+                try:
+                    buttons = self.page.locator(f'button:has-text("{text}")')
+                    button_count = await buttons.count()
+
+                    if button_count > 0:
+                        self.logger.info(f"Found {button_count} buttons with text '{text}'")
+
+                        for i in range(min(button_count, count - clicked)):
+                            try:
+                                if progress_callback:
+                                    progress = 0.2 + (0.7 * (clicked + 1) / count)
+                                    await progress_callback(f"Clicking analytics {clicked + 1}/{count}...", progress)
+
+                                await buttons.nth(i).click()
+                                self.logger.info(f"Clicked analytics button {clicked + 1}")
+                                clicked += 1
+
+                                await asyncio.sleep(4)
+
+                                await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
+                                await asyncio.sleep(3)
+
+                                buttons = self.page.locator(f'button:has-text("{text}")')
+
+                            except Exception as e:
+                                self.logger.warning(f"Failed to click button {i}: {e}")
+
+                except Exception as e:
+                    self.logger.debug(f"Text '{text}' search failed: {e}")
+
+        # FINAL FALLBACK: Try generic CSS selectors
+        if clicked == 0:
+            self.logger.info("No buttons found, trying generic CSS selectors...")
             css_selectors = [
+                '[data-tt="components_ActionCell_Container"]:has([data-icon="ChartRise"])',
                 '[data-e2e*="analytics"]',
-                'button[class*="analytics"]',
                 'a[href*="/analytics/"]',
             ]
 
@@ -712,33 +757,57 @@ class TikTokAPIExtractor:
 
         # Find video IDs from captured responses
         video_ids = []
+        self.logger.info(f"Searching {len(self._captured_responses)} captured responses for video IDs...")
+
         for response in self._captured_responses:
             if not response.body or not isinstance(response.body, dict):
                 continue
 
+            # Log the URL and top-level keys for debugging
+            url = getattr(response, 'url', 'unknown')
+            top_keys = list(response.body.keys())[:10]
+            self.logger.debug(f"Checking response from {url}, keys: {top_keys}")
+
             # Look for video list data in various locations
             items = None
+            body = response.body
 
-            # Try direct itemList
-            if 'itemList' in response.body:
-                items = response.body['itemList']
-            # Try nested in data
-            elif 'data' in response.body and isinstance(response.body['data'], dict):
-                data = response.body['data']
-                if 'itemList' in data:
-                    items = data['itemList']
-                elif 'item_list' in data:
-                    items = data['item_list']
-                elif 'videos' in data:
-                    items = data['videos']
+            # Direct field names (TikTok uses various naming conventions)
+            direct_fields = ['itemList', 'item_list', 'list', 'videos', 'items', 'data_list']
+            for field in direct_fields:
+                if field in body and isinstance(body[field], list):
+                    items = body[field]
+                    self.logger.debug(f"Found items in body['{field}'] with {len(items)} items")
+                    break
+
+            # Nested in 'data' object
+            if not items and 'data' in body and isinstance(body['data'], dict):
+                data = body['data']
+                for field in direct_fields:
+                    if field in data and isinstance(data[field], list):
+                        items = data[field]
+                        self.logger.debug(f"Found items in body['data']['{field}'] with {len(items)} items")
+                        break
 
             if items and isinstance(items, list):
                 for item in items:
                     if isinstance(item, dict):
-                        # Try various video ID field names
-                        video_id = item.get('id') or item.get('video_id') or item.get('itemId') or item.get('item_id')
-                        if video_id and video_id not in video_ids:
+                        # Try various video ID field names (TikTok uses different names)
+                        video_id = (
+                            item.get('id') or
+                            item.get('video_id') or
+                            item.get('itemId') or
+                            item.get('item_id') or
+                            item.get('aweme_id') or
+                            item.get('awemeId') or
+                            item.get('videoId') or
+                            # Nested in video object
+                            (item.get('video', {}) or {}).get('id') or
+                            (item.get('item', {}) or {}).get('id')
+                        )
+                        if video_id and str(video_id) not in video_ids:
                             video_ids.append(str(video_id))
+                            self.logger.debug(f"Found video ID: {video_id}")
 
                     if len(video_ids) >= count:
                         break
@@ -778,34 +847,38 @@ class TikTokAPIExtractor:
         Fallback method: Try to find and click analytics buttons directly on the page.
 
         This is used when we can't find video rows but might still find analytics buttons.
-        Uses Playwright's locator API for text-based matching.
+        Based on DevTools: analytics element is a <div> with data-icon="ChartRise".
         """
         self.logger.info("Trying to find analytics buttons directly...")
 
         clicked = 0
 
-        # First try text-based matching using locator API
-        button_texts = ["צפייה בניתוח נתונים", "View analytics"]
-        for text in button_texts:
+        # FIRST: Try the known selector based on DevTools inspection
+        # The analytics "button" is actually a <div> with a ChartRise icon
+        primary_selectors = [
+            '[data-icon="ChartRise"]',                    # The chart icon itself (most reliable)
+            '[data-testid="ChartRise"]',                  # TestID attribute
+        ]
+
+        for selector in primary_selectors:
             if clicked >= count:
                 break
 
             try:
-                # Use locator API for text matching
-                buttons = self.page.locator(f'button:has-text("{text}")')
+                buttons = self.page.locator(selector)
                 button_count = await buttons.count()
 
                 if button_count > 0:
-                    self.logger.info(f"Found {button_count} buttons with text '{text}'")
+                    self.logger.info(f"Found {button_count} analytics icons with selector '{selector}'")
 
                     for i in range(min(button_count, count - clicked)):
                         try:
                             if progress_callback:
                                 progress = 0.2 + (0.7 * (clicked + 1) / count)
-                                await progress_callback(f"Clicking analytics button {clicked + 1}...", progress)
+                                await progress_callback(f"Clicking analytics {clicked + 1}...", progress)
 
                             await buttons.nth(i).click()
-                            self.logger.info(f"Clicked analytics button {clicked + 1}")
+                            self.logger.info(f"Clicked analytics icon {clicked + 1}")
                             clicked += 1
 
                             await asyncio.sleep(4)
@@ -814,18 +887,61 @@ class TikTokAPIExtractor:
                             await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
                             await asyncio.sleep(3)
 
-                            # Re-fetch buttons
-                            buttons = self.page.locator(f'button:has-text("{text}")')
+                            # Re-fetch icons after navigation
+                            buttons = self.page.locator(selector)
 
                         except Exception as e:
-                            self.logger.warning(f"Failed to click button {i + 1}: {e}")
+                            self.logger.warning(f"Failed to click icon {i + 1}: {e}")
+
+                    if clicked > 0:
+                        break  # Found and clicked at least one
 
             except Exception as e:
-                self.logger.debug(f"Text '{text}' search failed: {e}")
+                self.logger.debug(f"Selector '{selector}' failed: {e}")
 
-        # Then try CSS selectors
+        # FALLBACK: Try text-based matching (in case UI changes)
+        if clicked == 0:
+            self.logger.info("No ChartRise icons found, trying text-based search...")
+            button_texts = ["צפייה בניתוח נתונים", "View analytics"]
+
+            for text in button_texts:
+                if clicked >= count:
+                    break
+
+                try:
+                    buttons = self.page.locator(f'button:has-text("{text}")')
+                    button_count = await buttons.count()
+
+                    if button_count > 0:
+                        self.logger.info(f"Found {button_count} buttons with text '{text}'")
+
+                        for i in range(min(button_count, count - clicked)):
+                            try:
+                                if progress_callback:
+                                    progress = 0.2 + (0.7 * (clicked + 1) / count)
+                                    await progress_callback(f"Clicking analytics button {clicked + 1}...", progress)
+
+                                await buttons.nth(i).click()
+                                self.logger.info(f"Clicked analytics button {clicked + 1}")
+                                clicked += 1
+
+                                await asyncio.sleep(4)
+
+                                await self.page.goto(STUDIO_CONTENT_URL, wait_until="domcontentloaded", timeout=60000)
+                                await asyncio.sleep(3)
+
+                                buttons = self.page.locator(f'button:has-text("{text}")')
+
+                            except Exception as e:
+                                self.logger.warning(f"Failed to click button {i + 1}: {e}")
+
+                except Exception as e:
+                    self.logger.debug(f"Text '{text}' search failed: {e}")
+
+        # FINAL FALLBACK: Try generic CSS selectors
         if clicked == 0:
             css_selectors = [
+                '[data-tt="components_ActionCell_Container"]:has([data-icon="ChartRise"])',
                 'a[href*="/analytics/"]',
                 '[data-e2e*="analytics-button"]',
                 '[data-e2e*="analytics"]',
