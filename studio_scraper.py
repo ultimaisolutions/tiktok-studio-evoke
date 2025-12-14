@@ -1183,8 +1183,9 @@ class TikTokStudioScraper:
             analytics_url = video_info["analytics_url"]
 
             # Navigate to video analytics page
+            # Use domcontentloaded instead of networkidle - TikTok Studio never reaches networkidle
             self.logger.debug(f"  Navigating to analytics: {analytics_url}")
-            await page.goto(analytics_url, wait_until="networkidle", timeout=60000)
+            await page.goto(analytics_url, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(2)
 
             # Extract metadata from page
@@ -1923,8 +1924,9 @@ class TikTokStudioScraper:
             analytics_url = video_info["analytics_url"]
 
             # Navigate to video analytics page
+            # Use domcontentloaded instead of networkidle - TikTok Studio never reaches networkidle
             self.logger.info(f"  Navigating to analytics: {analytics_url}")
-            await self.page.goto(analytics_url, wait_until="networkidle", timeout=60000)
+            await self.page.goto(analytics_url, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
 
             # Extract metadata from page (username, date, etc.)
